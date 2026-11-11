@@ -1,0 +1,7 @@
+/target
+*.db
+*.db-*
+/data
+admin.token
+.env
+.DS_Store

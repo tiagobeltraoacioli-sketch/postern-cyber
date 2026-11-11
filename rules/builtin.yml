@@ -1,0 +1,350 @@
+# Postern Cyber built-in behavioral detections (Linux and macOS).
+# Format: see docs/RULES.md. Regexes use Rust `regex` syntax.
+
+- id: PC-EXE-001
+  title: Reverse shell through /dev/tcp
+  description: A shell redirecting its streams to a /dev/tcp or /dev/udp socket.
+  severity: critical
+  mitre: [T1059.004, T1071]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '/dev/(tcp|udp)/[^ ]+/\d+' }
+  response: [kill_process]
+
+- id: PC-EXE-002
+  title: Interactive shell bound to a network tool
+  description: netcat, ncat or socat started with an option that attaches a shell.
+  severity: critical
+  mitre: [T1059.004, T1105]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)\b(nc|ncat|netcat|nc\.traditional)\b.*\s-(e|c)\s|\bsocat\b.*\bexec:' }
+  response: [kill_process]
+
+- id: PC-EXE-003
+  title: Scripting-language reverse shell one-liner
+  description: python, perl, ruby or php opening a socket and spawning a shell inline.
+  severity: critical
+  mitre: [T1059.006]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)\b(python[0-9.]*|perl|ruby|php)\b.*\s-(c|e|r)\s.*socket' }
+      - { field: process.cmdline, op: regex, value: '(?i)(/bin/(ba)?sh|pty\.spawn|subprocess|exec\(|dup2)' }
+  response: [kill_process]
+
+- id: PC-EXE-004
+  title: Download piped straight into a shell
+  description: curl or wget output executed by an interpreter without touching disk.
+  severity: high
+  mitre: [T1105, T1059.004]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b' }
+
+- id: PC-EXE-005
+  title: Base64 payload decoded into a shell
+  description: An encoded payload decoded and executed in one pipeline.
+  severity: high
+  mitre: [T1027, T1140]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)base64\s+(-d|--decode|-D)\b.*\|\s*(ba|z|da)?sh\b' }
+
+- id: PC-EXE-006
+  title: Execution from a world-writable directory
+  description: A binary started from /tmp, /var/tmp or /dev/shm.
+  severity: medium
+  mitre: [T1036, T1204.002]
+  kind: process_start
+  match:
+    all:
+      - { field: process.exe, op: regex, value: '^(/private)?(/tmp|/var/tmp|/dev/shm)/' }
+
+- id: PC-EXE-007
+  title: Web server spawned a shell
+  description: A web or application server process is the parent of an interactive shell. Typical of a web shell or remote code execution.
+  severity: critical
+  mitre: [T1505.003, T1190]
+  kind: process_start
+  match:
+    all:
+      - { field: process.parent_name, op: regex, value: '(?i)^(nginx|apache2?|httpd|php-fpm[0-9.]*|php|tomcat|java|node|uwsgi|gunicorn|caddy)$' }
+      - { field: process.name, op: in, value: [sh, bash, dash, zsh, ksh, nc, ncat, curl, wget, python3, perl] }
+    none:
+      - { field: process.cmdline, op: regex, value: '(?i)(npm|yarn|pnpm|node_modules)' }
+
+- id: PC-IMP-001
+  title: Cryptocurrency miner
+  description: Known miner binary names or stratum mining protocol arguments.
+  severity: high
+  mitre: [T1496]
+  kind: process_start
+  match:
+    any:
+      - { field: process.name, op: regex, value: '(?i)^(xmrig|xmr-stak|minerd|cpuminer|ethminer|nbminer|t-rex|kdevtmpfsi|kinsing)' }
+      - { field: process.cmdline, op: regex, value: '(?i)stratum\+(tcp|ssl)://|--donate-level|--coin[= ]monero' }
+  response: [kill_process, quarantine_file]
+
+- id: PC-IMP-002
+  title: Mass file encryption or secure deletion tooling
+  description: Command lines consistent with ransomware staging - bulk encryption or shredding of user data.
+  severity: critical
+  mitre: [T1486, T1485]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)\bfind\b.*-exec\s+(openssl\s+enc|gpg\s+(-c|--symmetric)|shred)\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bopenssl\s+enc\b.*-(aes|chacha)[^ ]*.*\s-in\s.*\.(sql|db|tar|bak|doc|xls|pdf)' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bshred\b.*\s-[a-z]*u[a-z]*\s.*(/home|/var/lib|/srv|/root)' }
+  response: [kill_process, isolate_host]
+
+- id: PC-CRED-001
+  title: Credential store read by a non-system tool
+  description: Direct access to /etc/shadow, SSH private keys or cloud credential files from a generic utility.
+  severity: high
+  mitre: [T1003.008, T1552.001]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: in, value: [cat, less, more, head, tail, cp, scp, tar, zip, base64, xxd, strings, dd, grep, awk, sed, curl, nc] }
+      - { field: process.cmdline, op: regex, value: '(/etc/shadow|/etc/gshadow|\.ssh/id_(rsa|ed25519|ecdsa|dsa)\b|\.aws/credentials|\.kube/config|\.docker/config\.json|\.config/gcloud/)' }
+
+- id: PC-CRED-002
+  title: Credential dumping tool
+  description: Known credential-harvesting utilities.
+  severity: critical
+  mitre: [T1003]
+  kind: process_start
+  match:
+    any:
+      - { field: process.name, op: regex, value: '(?i)^(mimipenguin|lazagne|linpeas|linenum|pspy(32|64)?|truffleHog|gitleaks)' }
+      - { field: process.cmdline, op: regex, value: '(?i)(mimipenguin|lazagne|linpeas\.sh|LinEnum\.sh)' }
+
+- id: PC-CRED-003
+  title: SSH brute force
+  description: Many failed authentications from one source address in a short window.
+  severity: high
+  mitre: [T1110.001]
+  kind: auth
+  match:
+    all:
+      - { field: auth.result, op: eq, value: failure }
+  threshold: { count: 10, window_secs: 120, group_by: auth.source_ip }
+
+- id: PC-CRED-004
+  title: Root login over SSH
+  description: A successful interactive SSH session for the root account.
+  severity: medium
+  mitre: [T1078.003]
+  kind: auth
+  match:
+    all:
+      - { field: auth.result, op: eq, value: success }
+      - { field: auth.user, op: eq, value: root }
+      - { field: auth.service, op: eq, value: sshd }
+
+- id: PC-PER-001
+  title: SSH authorized_keys modified
+  description: A public key was added or changed, granting persistent remote access.
+  severity: high
+  mitre: [T1098.004]
+  kind: file_change
+  match:
+    all:
+      - { field: file.path, op: endswith, value: '/.ssh/authorized_keys' }
+      - { field: file.action, op: in, value: [created, modified] }
+
+- id: PC-PER-002
+  title: Scheduled task created or changed
+  description: A cron definition was created or modified.
+  severity: medium
+  mitre: [T1053.003]
+  kind: file_change
+  match:
+    all:
+      - { field: file.path, op: regex, value: '^(/etc/crontab|/etc/cron\.[a-z.]+/|/var/spool/cron/)' }
+      - { field: file.action, op: in, value: [created, modified] }
+
+- id: PC-PER-003
+  title: System service unit created or changed
+  description: A systemd unit or macOS launch item was created or modified.
+  severity: medium
+  mitre: [T1543.002, T1543.004]
+  kind: file_change
+  match:
+    all:
+      - { field: file.path, op: regex, value: '^(/etc/systemd/system/[^/]+\.(service|timer)|/Library/Launch(Daemons|Agents)/.+\.plist)$' }
+      - { field: file.action, op: in, value: [created, modified] }
+
+- id: PC-PER-004
+  title: Dynamic linker preload hijack
+  description: /etc/ld.so.preload was written. Legitimate use is extremely rare; this is a common userland rootkit technique.
+  severity: critical
+  mitre: [T1574.006]
+  kind: file_change
+  match:
+    all:
+      - { field: file.path, op: eq, value: /etc/ld.so.preload }
+      - { field: file.action, op: in, value: [created, modified] }
+  response: [isolate_host]
+
+- id: PC-PER-005
+  title: Account database modified
+  description: /etc/passwd, /etc/shadow or sudoers changed.
+  severity: high
+  mitre: [T1136.001, T1548.003]
+  kind: file_change
+  match:
+    all:
+      - { field: file.path, op: regex, value: '^(/etc/passwd|/etc/shadow|/etc/sudoers|/etc/sudoers\.d/.+)$' }
+      - { field: file.action, op: in, value: [created, modified] }
+
+- id: PC-PER-006
+  title: Local account created or elevated
+  description: useradd, adduser or usermod granting an administrative group.
+  severity: medium
+  mitre: [T1136.001, T1098]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)^(/usr/sbin/)?(useradd|adduser)\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)\busermod\b.*-a?G\s*(sudo|wheel|admin|root|docker)' }
+
+- id: PC-PRIV-001
+  title: Setuid bit added to a binary
+  description: chmod granting setuid or setgid, a common privilege-escalation backdoor.
+  severity: high
+  mitre: [T1548.001]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: eq, value: chmod }
+      - { field: process.cmdline, op: regex, value: '\s(\+s|u\+s|g\+s|[2467][0-7]{3})\s' }
+
+- id: PC-PRIV-002
+  title: Container escape primitive
+  description: Privileged container start, host namespace entry or host root mount.
+  severity: high
+  mitre: [T1611]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)\bdocker\s+run\b.*(--privileged|--pid[= ]host|-v\s+/:/)' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bnsenter\b.*(-t|--target)\s*1\b' }
+
+- id: PC-PRIV-003
+  title: Kernel module loaded manually
+  description: insmod or modprobe run interactively; may indicate a kernel rootkit.
+  severity: medium
+  mitre: [T1547.006]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: in, value: [insmod, modprobe] }
+      - { field: process.cmdline, op: regex, value: '(\.ko\b|/tmp/|/dev/shm/|/home/)' }
+
+- id: PC-EVA-001
+  title: Security control disabled
+  description: Firewall, audit or mandatory access control switched off.
+  severity: high
+  mitre: [T1562.001, T1562.004]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)\bufw\s+disable\b|\bsetenforce\s+0\b|\biptables\s+(-F|--flush)\b|\bnft\s+flush\s+ruleset\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bsystemctl\s+(stop|disable|mask)\s+.*(auditd|apparmor|falco|postern-sensor|clamav|fail2ban|firewalld)' }
+
+- id: PC-EVA-002
+  title: Log or shell history tampering
+  description: Deletion or truncation of system logs or shell history.
+  severity: high
+  mitre: [T1070.002, T1070.003]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)\b(rm|shred|truncate)\b.*(/var/log/|\.bash_history|\.zsh_history)' }
+      - { field: process.cmdline, op: regex, value: '(?i)history\s+-c|unset\s+HISTFILE|HISTSIZE=0|>\s*/var/log/(auth|syslog|secure|wtmp)' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bjournalctl\b.*--(vacuum-time=1s|rotate.*--vacuum)' }
+
+- id: PC-EVA-003
+  title: Timestomping
+  description: touch used to set a file's timestamps to match another file or an explicit past date.
+  severity: low
+  mitre: [T1070.006]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: eq, value: touch }
+      - { field: process.cmdline, op: regex, value: '\s(-r|--reference|-t|-d)\s' }
+
+- id: PC-DIS-001
+  title: Network scanning tool
+  description: Port or host discovery tooling executed on the endpoint.
+  severity: medium
+  mitre: [T1046]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: regex, value: '(?i)^(nmap|masscan|zmap|rustscan|naabu)$' }
+
+- id: PC-C2-001
+  title: Tunnelling or proxy tool
+  description: Reverse tunnel and pivoting utilities frequently used for command and control.
+  severity: high
+  mitre: [T1572, T1090]
+  kind: process_start
+  match:
+    any:
+      - { field: process.name, op: regex, value: '(?i)^(chisel|ngrok|frpc|frps|ligolo|ligolo-ng|gost|iodine|dnscat2?|sliver(-client|-server)?|sshuttle)$' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bssh\b.*\s-R\s*\d+:' }
+
+- id: PC-C2-002
+  title: Outbound connection to a common mining or C2 port
+  description: A new outbound connection to ports strongly associated with stratum pools and default C2 listeners.
+  severity: medium
+  mitre: [T1571]
+  kind: net_conn
+  match:
+    all:
+      - { field: net.direction, op: eq, value: outbound }
+      - { field: net.remote_port, op: in, value: ['3333', '4444', '5555', '14444', '14433', '45700', '1337', '31337'] }
+
+- id: PC-C2-003
+  title: New listening port opened by a shell or network tool
+  description: A listener was opened by an interpreter or a raw network utility.
+  severity: high
+  mitre: [T1571, T1059]
+  kind: listen_port
+  match:
+    all:
+      - { field: process.name, op: regex, value: '(?i)^(nc|ncat|netcat|socat|bash|sh|dash|python[0-9.]*|perl|ruby|php)$' }
+    none:
+      - { field: net.baseline, op: eq, value: 'true' }
+
+- id: PC-EXF-001
+  title: Archive of sensitive directories staged for transfer
+  description: Sensitive locations packed into an archive in a temporary directory.
+  severity: medium
+  mitre: [T1560.001, T1074.001]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: in, value: [tar, zip, 7z, gzip] }
+      - { field: process.cmdline, op: regex, value: '(/tmp/|/dev/shm/|/var/tmp/)' }
+      - { field: process.cmdline, op: regex, value: '(/etc(/|\s|$)|/root(/|\s|$)|\.ssh|/var/lib/(mysql|postgresql)|\.aws|\.kube)' }
+
+- id: PC-EXF-002
+  title: Data pushed to a paste or file-sharing service
+  description: Upload to anonymous transfer services with a command-line client.
+  severity: high
+  mitre: [T1567]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)(transfer\.sh|file\.io|0x0\.st|pastebin\.com|termbin\.com|anonfiles|paste\.ee|ix\.io)' }
+      - { field: process.name, op: in, value: [curl, wget, nc, python3, python] }

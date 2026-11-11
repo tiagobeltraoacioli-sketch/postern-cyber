@@ -1,0 +1,10 @@
+# TLS termination for the console and the sensor API.
+console.posterncyber.com {
+    reverse_proxy 127.0.0.1:8460
+}
+
+# Marketing site (static files from site/).
+posterncyber.com, www.posterncyber.com {
+    root * /opt/postern/site
+    file_server
+}

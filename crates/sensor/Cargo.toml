@@ -1,0 +1,17 @@
+[package]
+name = "postern-sensor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+postern-proto = { path = "../proto" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+sha2.workspace = true
+hex.workspace = true
+clap.workspace = true
+sysinfo = "0.30"
+ureq = { version = "2", features = ["json"] }
+libc = "0.2"

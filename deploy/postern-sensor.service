@@ -1,0 +1,18 @@
+[Unit]
+Description=Postern Cyber endpoint sensor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Root gives full visibility (all users' processes, auth log, firewall) and is
+# required for response actions. Set POSTERN_RESPONSE to grant them.
+EnvironmentFile=/etc/postern/sensor.env
+ExecStart=/opt/postern/bin/postern-sensor
+Restart=always
+RestartSec=5
+Nice=10
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

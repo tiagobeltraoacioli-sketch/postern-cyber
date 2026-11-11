@@ -1,0 +1,23 @@
+[Unit]
+Description=Postern Cyber management server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=postern
+Group=postern
+ExecStart=/opt/postern/bin/postern-server --listen 127.0.0.1:8460 --data-dir /var/lib/postern
+# Optional: ANTHROPIC_API_KEY=..., POSTERN_AI_MODEL=claude-mythos-5-2
+EnvironmentFile=-/etc/postern/server.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/postern
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

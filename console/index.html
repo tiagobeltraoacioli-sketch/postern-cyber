@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postern Cyber Console</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121820;--panel2:#18202b;--line:#253040;--text:#e6ebf2;--mute:#8b98ab;--accent:#4cc2a4;--accent-ink:#06231c;
+--crit:#ff5d6c;--high:#ff9a4d;--med:#f2c94c;--low:#6fb1ff;--info:#8b98ab;--ok:#4cc2a4;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme: light){:root{--bg:#f4f6f9;--panel:#fff;--panel2:#eef1f5;--line:#d5dbe4;--text:#131a24;--mute:#5b6778;--accent:#0f8a6c;--accent-ink:#fff;
+--crit:#c8102e;--high:#c2570a;--med:#8a6a00;--low:#1c5fb8;--info:#5b6778;--ok:#0f8a6c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;align-items:center;gap:20px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.04em}.brand span{color:var(--accent)}
+nav{display:flex;gap:2px;flex-wrap:wrap}
+nav button{background:none;border:0;color:var(--mute);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--panel2);color:var(--text)}
+main{padding:20px;max-width:1400px;margin:0 auto}
+h2{font-size:16px;margin:0 0 12px}h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:18px 0 8px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.stat b{display:block;font-size:26px;font-variant-numeric:tabular-nums}.stat small{color:var(--mute)}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--panel2)}
+.wrap{overflow-x:auto}
+.mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+.sev{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;border:1px solid currentColor;text-transform:uppercase}
+.sev.critical{color:var(--crit)}.sev.high{color:var(--high)}.sev.medium{color:var(--med)}.sev.low{color:var(--low)}.sev.info{color:var(--info)}
+.tag{display:inline-block;padding:0 6px;border-radius:4px;background:var(--panel2);font-size:11px;font-family:var(--mono);margin-right:4px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mute);margin-right:6px}.dot.on{background:var(--ok)}.dot.iso{background:var(--crit)}
+button.b,select,input,textarea{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button.b{cursor:pointer}button.b:hover{border-color:var(--accent)}button.b.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button.b.danger{color:var(--crit)}button.b:disabled{opacity:.5;cursor:wait}
+textarea{width:100%;min-height:90px;font-family:var(--mono);font-size:12px}
+input[type=text],input[type=password]{min-width:220px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.mute{color:var(--mute)}.err{color:var(--crit)}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow:auto;font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-word;margin:8px 0}
+.bars{display:flex;align-items:flex-end;gap:3px;height:70px}.bars i{flex:1;background:var(--accent);min-height:2px;border-radius:2px 2px 0 0;opacity:.85}
+.verdict{border-left:3px solid var(--accent);padding-left:14px}
+#login{max-width:420px;margin:12vh auto}
+.two{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+</style>
+</head>
+<body>
+<div id="login" class="card" hidden>
+  <h2><span class="brand">POSTERN <span>CYBER</span></span></h2>
+  <p class="mute">Paste the admin token (written to <span class="mono">admin.token</span> in the server's data directory) or an API key.</p>
+  <div class="row"><input id="tok" type="password" placeholder="pca_…" style="flex:1"><button class="b pri" id="tokgo">Sign in</button></div>
+  <div id="loginerr" class="err"></div>
+</div>
+<div id="app" hidden>
+<header>
+  <div class="brand">POSTERN <span>CYBER</span></div>
+  <nav id="nav"></nav>
+  <span style="flex:1"></span>
+  <button class="b" id="logout">Sign out</button>
+</header>
+<main id="view"></main>
+</div>
+<script>
+"use strict";
+// Every value rendered here can originate from an endpoint under attack.
+// Nothing is ever inserted as HTML without passing through esc().
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $ = id => document.getElementById(id);
+const view = $("view");
+let token = sessionStorage.getItem("postern_token") || "";
+let timer = null;
+
+async function api(path, body) {
+  const r = await fetch("/api/v1" + path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {"Authorization": "Bearer " + token, ...(body === undefined ? {} : {"Content-Type": "application/json"})},
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({error: r.statusText}));
+  if (r.status === 401) { signOut(); throw new Error("session expired"); }
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const when = ms => ms ? new Date(ms).toLocaleString() : "—";
+const ago = ms => { if (!ms) return "never"; const s = (Date.now() - ms) / 1000;
+  return s < 90 ? Math.round(s) + "s ago" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 129600 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago"; };
+const sev = s => `<span class="sev ${esc(s)}">${esc(s)}</span>`;
+const tags = a => (a || []).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+const subject = f => f ? (f["process.cmdline"] || f["file.path"] || (f["net.remote_ip"] ? `${f["net.remote_ip"]}:${f["net.remote_port"]}` : "") ||
+  (f["auth.user"] ? `${f["auth.user"]} ${f["auth.result"] || ""} ${f["auth.source_ip"] || ""}` : "") || (f["net.local_port"] ? `port ${f["net.local_port"]}` : "") ||
+  (f["posture.check"] ? `${f["posture.check"]}: ${f["posture.status"]}` : JSON.stringify(f))) : "";
+const table = (heads, rows, empty) => rows.length
+  ? `<div class="wrap"><table><thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
+  : `<p class="mute">${esc(empty)}</p>`;
+async function busy(btn, fn) { const t = btn.textContent; btn.disabled = true; btn.textContent = "Working…";
+  try { await fn(); } catch (e) { alert(e.message); } finally { btn.disabled = false; btn.textContent = t; } }
+
+const tabs = {
+  Overview: async () => {
+    const o = await api("/overview");
+    const open = Object.fromEntries((o.incidents_open || []).map(x => [x.severity, x.n]));
+    const max = Math.max(1, ...o.alerts_by_hour);
+    const list = (title, items) => `<div class="card"><h3 style="margin-top:0">${title}</h3>${items.length
+      ? items.map(i => `<div class="row" style="margin:0;justify-content:space-between"><span>${esc(i.name)}</span><b>${i.count}</b></div>`).join("")
+      : '<p class="mute">Nothing in the last 24 hours.</p>'}</div>`;
+    view.innerHTML = `<div class="grid">
+      <div class="card stat"><b>${o.endpoints_online}/${o.endpoints_total}</b><small>endpoints online</small></div>
+      <div class="card stat"><b style="color:var(--crit)">${open.critical || 0}</b><small>critical incidents open</small></div>
+      <div class="card stat"><b style="color:var(--high)">${open.high || 0}</b><small>high incidents open</small></div>
+      <div class="card stat"><b>${(open.medium || 0) + (open.low || 0)}</b><small>medium / low open</small></div>
+      <div class="card stat"><b>${o.alerts_24h}</b><small>alerts, 24h</small></div>
+      <div class="card stat"><b>${o.events_24h.toLocaleString()}</b><small>events, 24h</small></div>
+      <div class="card stat"><b>${o.endpoints_isolated}</b><small>hosts isolated</small></div>
+      <div class="card stat"><b>${o.rules_loaded}</b><small>detections active</small></div></div>
+      <h3>Alerts per hour, last 24 hours</h3>
+      <div class="card"><div class="bars">${o.alerts_by_hour.map(n => `<i title="${n} alerts" style="height:${Math.round(n / max * 100)}%"></i>`).join("")}</div></div>
+      <div class="two" style="margin-top:12px">${list("Top MITRE ATT&amp;CK techniques", o.top_techniques)}${list("Top detections", o.top_rules)}</div>
+      ${o.ai_configured ? "" : '<p class="mute" style="margin-top:14px">AI analyst is not configured. Add an Anthropic API key under Settings to enable triage, hunting and rule drafting.</p>'}`;
+  },
+
+  Incidents: async () => {
+    const st = sessionStorage.getItem("inc_status") || "active";
+    const rows = await api("/incidents?status=" + st);
+    view.innerHTML = `<div class="row"><h2 style="margin:0">Incidents</h2><select id="incst">${["active","open","investigating","resolved","false_positive","all"]
+      .map(s => `<option ${s === st ? "selected" : ""}>${s}</option>`).join("")}</select></div>` +
+      table(["#","Severity","Title","Endpoint","Alerts","Status","AI verdict","Updated"], rows.map(i =>
+        `<tr class="click" data-id="${i.id}"><td>${i.id}</td><td>${sev(i.severity)}</td><td>${esc(i.title)}</td><td>${esc(i.hostname)}</td><td>${i.alert_count}</td>
+         <td>${esc(i.status)}</td><td>${esc(i.verdict || "—")}</td><td>${ago(i.updated_at)}</td></tr>`), "No incidents with this status.");
+    $("incst").onchange = e => { sessionStorage.setItem("inc_status", e.target.value); show("Incidents"); };
+    view.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => incident(tr.dataset.id));
+  },
+
+  Endpoints: async () => {
+    const rows = await api("/endpoints");
+    view.innerHTML = `<h2>Endpoints</h2>` + table(["Host","OS","Sensor","Last seen","CPU","Memory","Mode","Response","Open incidents",""], rows.map(e => {
+      const hb = e.heartbeat || {}, online = Date.now() - e.last_seen < 90000, ext = e.os === "external";
+      return `<tr><td><span class="dot ${e.isolated ? "iso" : online ? "on" : ""}"></span><a href="#" data-ep="${esc(e.id)}">${esc(e.hostname)}</a>${e.isolated ? ' <span class="sev critical">isolated</span>' : ""}</td>
+        <td>${esc(e.os)} ${esc(e.arch)}</td><td>${esc(e.version)}</td><td>${ago(e.last_seen)}</td>
+        <td>${ext ? "" : (hb.cpu_pct ?? 0).toFixed(0) + "%"}</td><td>${ext ? "" : `${hb.mem_used_mb ?? 0} / ${hb.mem_total_mb ?? 0} MB`}</td>
+        <td>${ext ? "" : `<select data-mode="${esc(e.id)}"><option ${e.mode === "detect" ? "selected" : ""}>detect</option><option ${e.mode === "protect" ? "selected" : ""}>protect</option></select>`}</td>
+        <td>${tags(hb.response_caps)}${ext || (hb.response_caps || []).length ? "" : '<span class="mute">observe only</span>'}</td><td>${e.open_incidents}</td>
+        <td>${ext ? "" : `<button class="b" data-act="collect_triage" data-id="${esc(e.id)}">Triage snapshot</button>
+          <button class="b danger" data-act="${e.isolated ? "unisolate_host" : "isolate_host"}" data-id="${esc(e.id)}">${e.isolated ? "Lift isolation" : "Isolate"}</button>`}</td></tr>`;
+    }), "No endpoints enrolled yet. Install a sensor with the enrollment token from Settings.") + `<div id="epd"></div>`;
+    view.querySelectorAll("[data-mode]").forEach(s => s.onchange = async () => {
+      if (s.value === "protect" && !confirm("Protect mode lets detections kill processes, quarantine files and isolate this host automatically. Continue?")) return show("Endpoints");
+      await api(`/endpoints/${s.dataset.mode}/mode`, {mode: s.value});
+    });
+    view.querySelectorAll("[data-act]").forEach(b => b.onclick = () => {
+      if (b.dataset.act === "isolate_host" && !confirm("Isolate this host from the network? Only the management server stays reachable.")) return;
+      busy(b, async () => { await api(`/endpoints/${b.dataset.id}/actions`, {kind: b.dataset.act}); show("Response"); });
+    });
+    view.querySelectorAll("[data-ep]").forEach(a => a.onclick = async ev => {
+      ev.preventDefault();
+      const d = await api("/endpoints/" + a.dataset.ep), inv = d.endpoint.inventory || {};
+      $("epd").innerHTML = `<h3>${esc(d.endpoint.hostname)} — security posture</h3>` +
+        table(["Check","Status","Detail"], d.posture.map(p => { const f = p.fields; const s = f["posture.status"];
+          return `<tr><td class="mono">${esc(f["posture.check"])}</td><td><span class="sev ${s === "pass" ? "low" : s === "fail" ? "high" : "info"}">${esc(s)}</span></td><td>${esc(f["posture.detail"])}</td></tr>`; }),
+          "No posture results yet (sent at sensor start and every 6 hours).") +
+        `<h3>Listening ports</h3>` + table(["Port","Process","First seen"], d.listeners.map(l =>
+          `<tr><td>${esc(l.fields["net.local_port"])}</td><td>${esc(l.fields["process.name"] || "unknown")}</td><td>${when(l.ts)}</td></tr>`), "None recorded.") +
+        `<h3>Inventory</h3><p>${esc(inv.os || "")} · kernel ${esc(inv.kernel || "?")} · ${esc(inv.package_count ?? 0)} packages · login users: ${esc((inv.login_users || []).join(", "))}</p>`;
+    });
+  },
+
+  Hunt: async () => {
+    const q = sessionStorage.getItem("hunt_q") || "", kind = sessionStorage.getItem("hunt_k") || "", mins = sessionStorage.getItem("hunt_m") || "60";
+    view.innerHTML = `<h2>Hunt — raw telemetry</h2><div class="row">
+      <input id="hq" type="text" placeholder="text in command line, path, address, user…" value="${esc(q)}" style="flex:1">
+      <select id="hk">${["","process_start","file_change","net_conn","listen_port","auth","posture","external"].map(k => `<option value="${k}" ${k === kind ? "selected" : ""}>${k || "any kind"}</option>`).join("")}</select>
+      <select id="hm">${[["60","last hour"],["1440","last 24h"],["10080","last 7d"],["43200","last 30d"]].map(([v, l]) => `<option value="${v}" ${v === mins ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <button class="b pri" id="hgo">Search</button></div><div id="hres"></div>`;
+    const run = async () => {
+      sessionStorage.setItem("hunt_q", $("hq").value); sessionStorage.setItem("hunt_k", $("hk").value); sessionStorage.setItem("hunt_m", $("hm").value);
+      const rows = await api(`/events?q=${encodeURIComponent($("hq").value)}&kind=${$("hk").value}&since_minutes=${$("hm").value}&limit=300`);
+      $("hres").innerHTML = table(["Id","Time","Host","Kind","Detail"], rows.map(e =>
+        `<tr class="click"><td>${e.id}</td><td style="white-space:nowrap">${when(e.ts)}</td><td>${esc(e.hostname)}</td><td><span class="tag">${esc(e.kind)}</span></td>
+         <td class="mono">${esc(subject(e.fields))}<pre hidden>${esc(JSON.stringify(e.fields, null, 2))}</pre></td></tr>`), "No events match.");
+      $("hres").querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { const p = tr.querySelector("pre"); p.hidden = !p.hidden; });
+    };
+    $("hgo").onclick = run; $("hq").onkeydown = e => e.key === "Enter" && run();
+    await run();
+  },
+
+  "AI Analyst": async () => {
+    view.innerHTML = `<div class="two"><div class="card"><h2>Ask the analyst</h2>
+      <p class="mute">The model queries your telemetry with read-only tools and answers from the evidence it finds. It cannot run response actions.</p>
+      <textarea id="aq" placeholder="Did anything connect out to an unusual port from the web servers this week?"></textarea>
+      <div class="row" style="margin-top:8px"><button class="b pri" id="ago">Investigate</button><span class="mute" id="ast"></span></div><div id="aout"></div></div>
+      <div class="card"><h2>Draft a detection</h2><p class="mute">Describe a behaviour; review the rule before saving it.</p>
+      <textarea id="rq" placeholder="Alert when a database dump is written to a temp directory and then uploaded with curl."></textarea>
+      <div class="row" style="margin-top:8px"><button class="b pri" id="rgo">Draft rule</button></div><div id="rout"></div></div></div>`;
+    $("ago").onclick = e => busy(e.target, async () => {
+      $("ast").textContent = "This can take a few minutes on a wide question.";
+      try { const r = await api("/ai/hunt", {question: $("aq").value});
+        $("aout").innerHTML = `<h3>Answer <span class="tag">${esc(r.model)}</span></h3><pre>${esc(r.answer)}</pre><h3>Queries it ran</h3>` +
+          r.steps.map(s => `<div class="mono mute">${esc(s.tool)} ${esc(JSON.stringify(s.input))} → ${esc(s.error || s.rows + " rows")}</div>`).join("");
+      } finally { $("ast").textContent = ""; } });
+    $("rgo").onclick = e => busy(e.target, async () => {
+      const r = await api("/ai/rule", {description: $("rq").value});
+      $("rout").innerHTML = `<h3>Draft ${r.valid ? '<span class="sev low">valid</span>' : '<span class="sev high">needs fixing</span>'}</h3>
+        <textarea id="ryaml" style="min-height:260px">${esc(r.yaml)}</textarea>${r.valid ? "" : `<p class="err">${esc(r.validation_error)}</p>`}
+        <p>${esc(r.explanation)}</p><p class="mute"><b>False positives:</b> ${esc(r.false_positive_notes)}</p><button class="b pri" id="rsave">Save and enable</button>`;
+      $("rsave").onclick = ev => busy(ev.target, async () => { await api("/rules", {yaml: $("ryaml").value, source: "ai"}); show("Detections"); });
+    });
+  },
+
+  Detections: async () => {
+    const [rules, iocs] = await Promise.all([api("/rules"), api("/iocs")]);
+    view.innerHTML = `<h2>Detections</h2>` + table(["On","Id","Title","Severity","ATT&CK","Auto-response (protect mode)","Source",""], rules.map(r =>
+      `<tr><td><input type="checkbox" data-tog="${esc(r.id)}" ${r.enabled ? "checked" : ""}></td><td class="mono">${esc(r.id)}</td><td>${esc(r.title)}</td><td>${sev(r.severity)}</td>
+       <td>${tags(r.mitre)}</td><td>${tags(r.response)}</td><td>${esc(r.source)}</td><td>${r.source === "builtin" ? "" : `<button class="b danger" data-del="${esc(r.id)}">Delete</button>`}</td></tr>`), "No rules.") +
+      `<h3>Add or replace a custom rule (YAML)</h3><textarea id="ny" placeholder="id: PC-CUSTOM-001&#10;title: …&#10;severity: medium&#10;kind: process_start&#10;match:&#10;  all:&#10;    - { field: process.name, op: eq, value: example }"></textarea>
+       <div class="row" style="margin-top:8px"><button class="b pri" id="nsave">Save rule</button></div>
+       <h2 style="margin-top:24px">Indicators of compromise</h2>
+       <div class="row"><select id="ik"><option>sha256</option><option>ip</option></select><input id="iv" type="text" placeholder="value"><input id="in" type="text" placeholder="note"><button class="b pri" id="iadd">Add</button></div>` +
+      table(["Kind","Value","Note","Added",""], iocs.map(i => `<tr><td>${esc(i.kind)}</td><td class="mono">${esc(i.value)}</td><td>${esc(i.note)}</td><td>${when(i.created_at)}</td>
+        <td><button class="b danger" data-idel="${i.id}">Remove</button></td></tr>`), "No indicators. Matching process and file hashes or remote addresses raise a high-severity alert.");
+    view.querySelectorAll("[data-tog]").forEach(c => c.onchange = () => api(`/rules/${c.dataset.tog}/toggle`, {enabled: c.checked}).catch(e => alert(e.message)));
+    view.querySelectorAll("[data-del]").forEach(b => b.onclick = () => busy(b, async () => { await api(`/rules/${b.dataset.del}/delete`, {}); show("Detections"); }));
+    view.querySelectorAll("[data-idel]").forEach(b => b.onclick = () => busy(b, async () => { await api(`/iocs/${b.dataset.idel}/delete`, {}); show("Detections"); }));
+    $("nsave").onclick = e => busy(e.target, async () => { await api("/rules", {yaml: $("ny").value}); show("Detections"); });
+    $("iadd").onclick = e => busy(e.target, async () => { await api("/iocs", {kind: $("ik").value, value: $("iv").value, note: $("in").value}); show("Detections"); });
+  },
+
+  Response: async () => {
+    const [acts, audit] = await Promise.all([api("/actions"), api("/audit")]);
+    view.innerHTML = `<h2>Response actions</h2>` + table(["Requested","Host","Action","Parameters","Status","By","Result"], acts.map(a =>
+      `<tr class="click"><td style="white-space:nowrap">${when(a.created_at)}</td><td>${esc(a.hostname)}</td><td><span class="tag">${esc(a.kind)}</span></td><td class="mono">${esc(JSON.stringify(a.params))}</td>
+       <td><span class="sev ${a.status === "done" ? "low" : a.status === "failed" ? "high" : "info"}">${esc(a.status)}</span></td><td>${esc(a.requested_by)}</td>
+       <td class="mono">${esc((a.output || "").split("\n")[0].slice(0, 120))}<pre hidden>${esc(a.output)}</pre></td></tr>`), "No actions yet.") +
+      `<h2 style="margin-top:24px">Audit log</h2>` + table(["Time","Actor","Action","Detail"], audit.map(a =>
+      `<tr><td style="white-space:nowrap">${when(a.ts)}</td><td>${esc(a.actor)}</td><td class="mono">${esc(a.action)}</td><td class="mono">${esc(a.detail)}</td></tr>`), "Empty.");
+    view.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => { const p = tr.querySelector("pre"); if (p) p.hidden = !p.hidden; });
+  },
+
+  Settings: async () => {
+    const s = await api("/settings");
+    const origin = location.origin;
+    view.innerHTML = `<h2>Settings <span class="tag">v${esc(s.version)}</span></h2><div class="two">
+      <div class="card"><h3 style="margin-top:0">AI analyst (Anthropic API)</h3>
+        <p>Status: ${s.ai.configured ? `<span class="sev low">configured</span> key from ${esc(s.ai.key_source)}` : '<span class="sev high">no API key</span>'}</p>
+        <div class="row"><input id="ak" type="password" placeholder="sk-ant-… (leave empty to keep)" style="flex:1"></div>
+        <div class="row"><label>Model <input id="am" type="text" value="${esc(s.ai.model)}"></label>
+          <label>Effort <select id="ae">${["low","medium","high","xhigh","max"].map(e => `<option ${e === s.ai.effort ? "selected" : ""}>${e}</option>`).join("")}</select></label></div>
+        <div class="row"><label><input id="af" type="checkbox" ${s.ai.fallbacks ? "checked" : ""}> Re-run on Anthropic's recommended fallback model if a request is declined</label></div>
+        <div class="row"><button class="b pri" id="asave">Save</button><button class="b" id="atest">Test connection</button><span id="ares" class="mute"></span></div>
+        <p class="mute">Claude Mythos 5.2 (<span class="mono">claude-mythos-5-2</span>) is available to verified organizations only. Any other Claude model id works here too. The key is stored in the server database; prefer the <span class="mono">ANTHROPIC_API_KEY</span> environment variable on shared hosts.</p></div>
+      <div class="card"><h3 style="margin-top:0">Enroll a sensor</h3><p class="mute">Run on the endpoint (as root for full visibility):</p>
+        <pre>postern-sensor --server ${esc(origin)} \\\n  --enroll-token ${esc(s.enroll_token)}</pre>
+        <p class="mute">Add <span class="mono">--response kill,quarantine,isolate</span> to allow response actions on that host. Without it the sensor only observes.</p>
+        <h3>API keys</h3>${table(["Name","Role","Created"], s.api_keys.map(k => `<tr><td>${esc(k.name)}</td><td>${esc(k.role)}</td><td>${when(k.created_at)}</td></tr>`), "")}
+        <div class="row" style="margin-top:8px"><input id="kn" type="text" placeholder="integration name"><button class="b" id="kadd">Create key</button></div><div id="kout"></div></div></div>`;
+    $("asave").onclick = e => busy(e.target, async () => { const b = {model: $("am").value, effort: $("ae").value, fallbacks: $("af").checked};
+      if ($("ak").value) b.api_key = $("ak").value; await api("/settings/ai", b); show("Settings"); });
+    $("atest").onclick = e => busy(e.target, async () => { $("ares").textContent = "";
+      try { const r = await api("/settings/ai/test", {}); $("ares").textContent = `OK — served by ${r.served_by}`; } catch (x) { $("ares").textContent = x.message; } });
+    $("kadd").onclick = e => busy(e.target, async () => { const r = await api("/keys", {name: $("kn").value || "integration"});
+      $("kout").innerHTML = `<p>Copy this key now; it is not shown again:</p><pre>${esc(r.key)}</pre>`; });
+  },
+};
+
+async function incident(id) {
+  clearInterval(timer);
+  const d = await api("/incidents/" + id), i = d.incident, v = i.ai_verdict;
+  const actionBtn = a => a.kind === "manual" ? "" :
+    `<button class="b" data-rk="${esc(a.kind)}" data-rt="${esc(a.target)}">Approve: ${esc(a.kind)}</button>`;
+  view.innerHTML = `<div class="row"><button class="b" id="back">← Incidents</button><h2 style="margin:0">#${i.id} ${esc(i.title)}</h2>${sev(i.severity)}
+      <span class="tag">${esc(i.hostname)}</span><span style="flex:1"></span>
+      <select id="ist">${["open","investigating","resolved","false_positive"].map(s => `<option ${s === i.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+      <button class="b pri" id="tri">${v ? "Re-run AI triage" : "AI triage"}</button></div>
+    <div id="verdict">${v ? `<div class="card verdict"><div class="row"><b>AI verdict: ${esc(v.verdict)}</b><span class="tag">${esc(v.confidence)}% confidence</span>${sev(v.severity)}
+        ${tags(v.mitre_techniques)}<span class="mute">${esc(i.ai_model)} · ${when(i.ai_at)}</span></div>
+      <p>${esc(v.summary)}</p><h3>What happened</h3><p style="white-space:pre-wrap">${esc(v.narrative)}</p>
+      <h3>Recommended actions (you approve each one)</h3>${(v.recommended_actions || []).map(a =>
+        `<div class="row" style="margin-bottom:6px">${actionBtn(a)}<span><b>${esc(a.kind)}</b> <span class="mono">${esc(a.target)}</span> — ${esc(a.rationale)}</span></div>`).join("") || '<p class="mute">None.</p>'}
+      <h3>Follow-up questions</h3>${(v.follow_up_queries || []).map(q => `<div class="mute">• ${esc(q)}</div>`).join("")}</div>` : ""}</div>
+    <h3>Alerts (${d.alerts.length})</h3>` + table(["Time","Detection","Severity","ATT&CK","Event","Subject"], d.alerts.map(a =>
+      `<tr class="click"><td style="white-space:nowrap">${when(a.ts)}</td><td><span class="mono">${esc(a.rule_id)}</span> ${esc(a.title)}</td><td>${sev(a.severity)}</td><td>${tags(a.mitre)}</td>
+       <td>${esc(a.event_id)}</td><td class="mono">${esc(subject(a.fields))}<pre hidden>${esc(JSON.stringify(a.fields, null, 2))}</pre>
+       ${a.fields && a.fields["process.pid"] ? `<button class="b danger" data-rk="kill_process" data-rt="${esc(a.fields["process.pid"])}">Kill pid ${esc(a.fields["process.pid"])}</button>` : ""}</td></tr>`), "No alerts.") +
+    `<h3>Response actions since this incident opened</h3>` + table(["Time","Action","Status","By","Result"], d.actions.map(a =>
+      `<tr><td>${when(a.created_at)}</td><td><span class="tag">${esc(a.kind)}</span> <span class="mono">${esc(JSON.stringify(a.params))}</span></td><td>${esc(a.status)}</td><td>${esc(a.requested_by)}</td><td class="mono">${esc((a.output || "").slice(0, 200))}</td></tr>`), "None.");
+  $("back").onclick = () => show("Incidents");
+  $("ist").onchange = e => api(`/incidents/${id}/status`, {status: e.target.value}).catch(x => alert(x.message));
+  $("tri").onclick = e => busy(e.target, async () => { await api("/ai/triage/" + id, {}); await incident(id); });
+  view.querySelectorAll("tr.click").forEach(tr => tr.onclick = ev => { if (ev.target.tagName === "BUTTON") return; const p = tr.querySelector("pre"); p.hidden = !p.hidden; });
+  view.querySelectorAll("[data-rk]").forEach(b => b.onclick = () => {
+    const kind = b.dataset.rk, t = b.dataset.rt;
+    const params = kind === "kill_process" ? {pid: parseInt(t, 10)} : kind === "quarantine_file" ? {path: t} : {};
+    if (kind === "kill_process" && !Number.isInteger(params.pid)) return alert("The recommended target is not a pid; run this manually.");
+    if (!confirm(`Run ${kind} ${t} on ${i.hostname}?`)) return;
+    busy(b, async () => { await api(`/endpoints/${i.endpoint_id}/actions`, {kind, params}); await incident(id); });
+  });
+}
+
+async function show(name) {
+  clearInterval(timer);
+  sessionStorage.setItem("tab", name);
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.textContent === name));
+  try { await tabs[name](); } catch (e) { view.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  if (["Overview", "Incidents", "Response"].includes(name)) timer = setInterval(() => tabs[name]().catch(() => {}), 15000);
+}
+function signOut() { sessionStorage.removeItem("postern_token"); token = ""; clearInterval(timer); $("app").hidden = true; $("login").hidden = false; }
+async function start() {
+  if (!token) return signOut();
+  try { await api("/overview"); } catch (e) { $("loginerr").textContent = "That token was not accepted."; return signOut(); }
+  $("login").hidden = true; $("app").hidden = false;
+  $("nav").innerHTML = Object.keys(tabs).map(t => `<button>${esc(t)}</button>`).join("");
+  document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.textContent));
+  const saved = sessionStorage.getItem("tab");
+  show(tabs[saved] ? saved : "Overview");
+}
+$("tokgo").onclick = () => { token = $("tok").value.trim(); sessionStorage.setItem("postern_token", token); $("loginerr").textContent = ""; start(); };
+$("tok").onkeydown = e => e.key === "Enter" && $("tokgo").click();
+$("logout").onclick = signOut;
+start();
+</script>
+</body>
+</html>
