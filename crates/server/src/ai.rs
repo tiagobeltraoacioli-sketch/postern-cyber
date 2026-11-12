@@ -224,7 +224,7 @@ fn hunt_tools() -> Value {
                 "required": ["text", "kind", "hostname", "since_minutes", "limit"],
                 "properties": {
                     "text": {"type": "string", "description": "Substring to look for; empty string for no text filter."},
-                    "kind": {"type": "string", "enum": ["any", "process_start", "file_change", "net_conn", "listen_port", "auth", "posture", "external"]},
+                    "kind": {"type": "string", "enum": ["any", "process_start", "file_change", "net_conn", "listen_port", "auth", "posture", "exec_blocked", "ransomware_canary", "ransomware_suspected", "external"]},
                     "hostname": {"type": "string", "description": "Exact hostname, or empty string for all endpoints."},
                     "since_minutes": {"type": "integer", "description": "How far back to look."},
                     "limit": {"type": "integer", "description": "Maximum rows, up to 200."}
@@ -371,7 +371,7 @@ pub async fn draft_rule(state: &Arc<AppState>, description: &str) -> anyhow::Res
         "Write one Postern detection rule for this behaviour:\n\n{description}\n\n\
          Rule format (YAML): id (use the prefix PC-CUSTOM-), title, description, severity \
          (info|low|medium|high|critical), mitre (list of technique ids), kind (one of process_start, file_change, \
-         net_conn, listen_port, auth, external), match with `all` / `any` / `none` lists of \
+         net_conn, listen_port, auth, exec_blocked, external), match with `all` / `any` / `none` lists of \
          {{field, op, value}}, optional threshold {{count, window_secs, group_by}}, optional response \
          (kill_process, quarantine_file, isolate_host).\n\
          Operators: eq, contains (case-insensitive), startswith, endswith, in (list), regex (Rust regex syntax, \

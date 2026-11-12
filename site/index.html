@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Postern Cyber</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="Postern Cyber: self-hosted endpoint detection and response with an AI analyst powered by Claude Mythos 5.2 through your own API key.">
+<meta name="description" content="Postern Cyber: self-hosted endpoint detection, prevention and ransomware rollback with an AI analyst powered by Claude Mythos 5.2 through your own API key.">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 /* Layout: left-aligned editorial column on weathered stone; the one loud element is the
@@ -119,11 +119,11 @@ footer{font-size:.85rem;color:var(--mute);display:flex;justify-content:space-bet
 
 <div class="band" style="padding-top:36px"><div class="in hero">
   <div class="hero-copy">
-    <span class="eyebrow">Endpoint detection &amp; response · self-hosted</span>
+    <span class="eyebrow">Endpoint detection, prevention &amp; recovery · self-hosted</span>
     <h1>Watch the small gate. That is the one they use.</h1>
-    <p class="lede">Postern Cyber puts a sensor on every Linux and macOS host, correlates what it sees into one incident, and hands the investigation to an AI analyst running on Claude Mythos 5.2 through your own Anthropic API key. Your telemetry stays on your server.</p>
+    <p class="lede">Postern Cyber puts a sensor on Linux, macOS and Windows hosts, stops known-bad programs before they run, rolls files back after ransomware, and hands each incident to an AI analyst running on Claude Mythos 5.2 through your own Anthropic API key. Your telemetry stays on your server.</p>
     <div class="cta"><a class="btn solid" href="#deploy">Deploy in three steps</a><a class="btn" href="#status">See what ships today</a></div>
-    <div class="facts"><span><b>31</b> built-in detections</span><span><b>MITRE ATT&amp;CK</b> mapped</span><span><b>2</b> static binaries</span><span><b>0</b> telemetry leaves your infra</span></div>
+    <div class="facts"><span><b>47</b> built-in detections</span><span><b>MITRE ATT&amp;CK</b> mapped</span><span><b>2</b> static binaries</span><span><b>0</b> telemetry leaves your infra</span></div>
   </div>
 
   <aside class="postern" aria-label="Example incident">
@@ -152,15 +152,17 @@ footer{font-size:.85rem;color:var(--mute);display:flex;justify-content:space-bet
 <div class="band alt" id="coverage"><div class="in">
   <div class="head"><span class="eyebrow">Coverage</span><h2>What an enterprise endpoint platform does, in a codebase you can read.</h2></div>
   <div class="caps">
-    <article><span class="k">Sensor</span><h3>Endpoint telemetry</h3><p>Process starts with parent lineage, user and SHA-256. New outbound connections and listening ports. SSH and sudo authentication.</p></article>
-    <article><span class="k">Detect</span><h3>Behavioral detections</h3><p>31 rules for reverse shells, web shells, credential access, persistence, miners, tunnelling and log tampering. Write your own in YAML.</p></article>
+    <article><span class="k">Sensor</span><h3>Kernel-level telemetry</h3><p>On Linux the kernel pushes every program start to the sensor, with parent, user and SHA-256. Connections, listening ports and logons on every platform.</p></article>
+    <article><span class="k">Detect</span><h3>Behavioral detections</h3><p>47 rules for Linux, macOS and Windows: reverse shells, web shells, LSASS dumps, malicious documents, persistence, miners, tunnelling, log tampering. Write your own in YAML.</p></article>
+    <article><span class="k">Prevent</span><h3>Block before execution</h3><p>On Linux the kernel waits for the sensor's verdict. A binary on your hash block list, or under a blocked path, never starts, even renamed.</p></article>
+    <article><span class="k">Recover</span><h3>Ransomware rollback</h3><p>Versioned copies of the directories you protect, canary files checked every five seconds, and one action that restores the last good snapshot.</p></article>
     <article><span class="k">Correlate</span><h3>Incident storyline</h3><p>Alerts on one host inside a 30-minute window join a single incident, so an intrusion reads as one case instead of ten pages.</p></article>
     <article><span class="k">Respond</span><h3>Containment</h3><p>Kill a process, quarantine a file, isolate a host from the network with nftables. Manual by default; automatic per host in protect mode.</p></article>
     <article><span class="k">Integrity</span><h3>File integrity monitoring</h3><p>Account databases, sudoers, SSH keys, cron, systemd units and the dynamic linker preload are hashed and watched for change.</p></article>
     <article><span class="k">Intel</span><h3>Indicator matching</h3><p>Load file hashes and addresses. A running process or connection that matches raises a high-severity alert.</p></article>
-    <article><span class="k">Posture</span><h3>Exposure checks</h3><p>SSH hardening, firewall state, ASLR, pending updates, disk encryption, extra uid 0 accounts and package inventory per host.</p></article>
+    <article><span class="k">Exposure</span><h3>CVE matching and posture</h3><p>Installed packages are matched against the public vulnerability database on your own server. Plus SSH, firewall, updates, disk encryption and Defender checks.</p></article>
     <article><span class="k">XDR</span><h3>Third-party ingestion</h3><p>Post firewall, cloud or identity logs to one API endpoint. They run through the same detections and land in the same incidents.</p></article>
-    <article><span class="k">Govern</span><h3>Audit trail</h3><p>Every response action, rule change, enrollment and AI request is recorded with who asked for it.</p></article>
+    <article><span class="k">Govern</span><h3>SSO, roles and audit</h3><p>Sign in through your identity provider with OpenID Connect. Viewer, analyst and admin roles. Every action is recorded with who asked for it.</p></article>
   </div>
 </div></div>
 
@@ -197,7 +199,8 @@ footer{font-size:.85rem;color:var(--mute);display:flex;justify-content:space-bet
 <pre>postern-sensor \
   --server https://console.example.com \
   --enroll-token pce_… \
-  --response kill,quarantine,isolate</pre></article>
+  --response kill,isolate,prevent,rollback \
+  --protect /srv/data</pre></article>
     <article><h3>Connect the analyst</h3><p>Set the key in the console, or keep it out of the database entirely.</p>
 <pre>export ANTHROPIC_API_KEY=sk-ant-…
 export POSTERN_AI_MODEL=claude-mythos-5-2</pre></article>
@@ -205,19 +208,19 @@ export POSTERN_AI_MODEL=claude-mythos-5-2</pre></article>
 </div></div>
 
 <div class="band" id="status"><div class="in">
-  <div class="head"><span class="eyebrow">Status · version 0.1</span><h2>What ships today, and what does not yet.</h2>
+  <div class="head"><span class="eyebrow">Status · version 0.2</span><h2>What ships today, and what does not yet.</h2>
     <p class="lede">Postern Cyber is in private preview. This table is the full picture, so you can judge it against the platform you run now.</p></div>
   <div class="scroll"><table>
-    <thead><tr><th>Area</th><th>In 0.1</th><th>Planned</th></tr></thead>
+    <thead><tr><th>Area</th><th>In 0.2</th><th>Open</th></tr></thead>
     <tbody>
-      <tr><td>Platforms</td><td>Linux and macOS sensors</td><td>Windows sensor</td></tr>
-      <tr><td>Telemetry</td><td>Polling every 2 to 30 seconds; very short-lived processes can be missed</td><td>Kernel-level events through eBPF</td></tr>
-      <tr><td>Prevention</td><td>Kill, quarantine and isolate after detection</td><td>Blocking before execution</td></tr>
-      <tr><td>Ransomware</td><td>Detection of bulk encryption and shredding commands</td><td>Snapshot rollback</td></tr>
-      <tr><td>Exposure</td><td>Posture checks and package inventory</td><td>CVE matching against the inventory</td></tr>
+      <tr><td>Platforms</td><td>Linux and macOS sensors; Windows sensor builds and runs</td><td>Windows process and network telemetry is not yet proven on a real Windows host</td></tr>
+      <tr><td>Telemetry</td><td>Kernel-pushed process events on Linux; polling on macOS and Windows</td><td>eBPF, so the command line of a microsecond-lived process is guaranteed too</td></tr>
+      <tr><td>Prevention</td><td>Hash and path blocking before execution on Linux</td><td>Windows and macOS blocking; machine-learning verdicts</td></tr>
+      <tr><td>Ransomware</td><td>Canaries, mass-encryption detection, rollback of protected directories</td><td>Off-host copy of the vault; whole-disk snapshots</td></tr>
+      <tr><td>Exposure</td><td>CVE matching for Ubuntu and Debian; posture checks everywhere</td><td>Other distributions, Windows and macOS software</td></tr>
       <tr><td>Cloud &amp; identity</td><td>Log ingestion through the API</td><td>Native cloud and identity-provider connectors</td></tr>
-      <tr><td>Console access</td><td>Bearer tokens and API keys</td><td>Single sign-on and role-based access</td></tr>
-      <tr><td>Assurance</td><td>Unit tests and an end-to-end demo scenario</td><td>Independent security audit</td></tr>
+      <tr><td>Console access</td><td>Single sign-on (OpenID Connect) and three roles</td><td>Multi-tenancy</td></tr>
+      <tr><td>Assurance</td><td>Unit tests, kernel tests in a container, SSO tests against a mock provider</td><td>Independent security audit; AI analyst run against a production key</td></tr>
     </tbody>
   </table></div>
 </div></div>

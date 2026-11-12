@@ -5,6 +5,8 @@ mod ai;
 mod api;
 mod db;
 mod detect;
+mod sso;
+mod vuln;
 
 use clap::Parser;
 use rusqlite::{params, Connection};
@@ -30,6 +32,10 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub engine: Mutex<detect::Engine>,
     pub http: reqwest::Client,
+    pub data_dir: PathBuf,
+    pub sso_pending: Mutex<std::collections::HashMap<String, sso::Pending>>,
+    /// Set when an endpoint reports a new inventory; cleared by the matcher.
+    pub vuln_dirty: std::sync::atomic::AtomicBool,
 }
 
 /// Rebuild the in-memory engine from the enabled rules in the database.
@@ -87,6 +93,9 @@ async fn main() -> anyhow::Result<()> {
         engine: Mutex::new(detect::Engine::default()),
         // Triage on a hard incident can run for minutes on the largest models.
         http: reqwest::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?,
+        data_dir: args.data_dir.clone(),
+        sso_pending: Mutex::new(Default::default()),
+        vuln_dirty: std::sync::atomic::AtomicBool::new(true),
     });
     reload_rules(&state)?;
 
@@ -103,6 +112,22 @@ async fn main() -> anyhow::Result<()> {
                 "DELETE FROM events WHERE ts < ?1 AND id NOT IN (SELECT event_id FROM alerts WHERE event_id IS NOT NULL)",
                 [cutoff],
             );
+        }
+    });
+
+    // Vulnerability matching: when an inventory changes, and once a day.
+    let matcher = state.clone();
+    tokio::spawn(async move {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut last = std::time::Instant::now();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            if matcher.vuln_dirty.swap(false, Relaxed) || last.elapsed().as_secs() > 86_400 {
+                last = std::time::Instant::now();
+                if let Err(e) = vuln::refresh(&matcher, false).await {
+                    eprintln!("vulnerability matching failed: {e}");
+                }
+            }
         }
     });
 

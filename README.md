@@ -4,16 +4,16 @@ Self-hosted endpoint detection and response (EDR/XDR) with an AI analyst that
 runs on Claude through your own Anthropic API key. The default model is Claude
 Mythos 5.2 (`claude-mythos-5-2`).
 
-Status: **0.1, private preview.** Read [docs/COVERAGE.md](docs/COVERAGE.md)
+Status: **0.2, private preview.** Read [docs/COVERAGE.md](docs/COVERAGE.md)
 before relying on it: it lists what works today and what does not.
 
 ## What is in the box
 
 | Component | Path | What it does |
 |---|---|---|
-| `postern-sensor` | `crates/sensor` | Linux/macOS agent: process, network, file-integrity, authentication, posture and inventory telemetry; executes response actions it was granted |
-| `postern-server` | `crates/server` | Ingestion, detection engine, incident correlation, response queue, AI analyst, REST API, embedded console |
-| Detections | `rules/builtin.yml` | 31 behavioral rules mapped to MITRE ATT&CK |
+| `postern-sensor` | `crates/sensor` | Linux/macOS/Windows agent: kernel-pushed process events and pre-execution blocking (Linux), network, file-integrity, authentication, posture and inventory telemetry, ransomware vault and rollback; executes response actions it was granted |
+| `postern-server` | `crates/server` | Ingestion, detection engine, incident correlation, response queue, CVE matching, AI analyst, SSO and roles, REST API, embedded console |
+| Detections | `rules/builtin.yml` | 47 behavioral rules (Linux, macOS, Windows) mapped to MITRE ATT&CK |
 | Console | `console/index.html` | Operator UI, embedded in the server binary |
 | Website | `site/` | posterncyber.com landing page |
 
@@ -67,15 +67,35 @@ approves each action in the console.
 
 ## Response actions
 
-`kill_process`, `quarantine_file`, `isolate_host` / `unisolate_host` (Linux,
-nftables), `collect_triage`. A sensor executes only what it was started with:
+`kill_process`, `quarantine_file`, `isolate_host` / `unisolate_host`,
+`rollback_files`, `collect_triage`. A sensor executes only what it was
+started with:
 
 ```sh
-postern-sensor ... --response kill,quarantine,isolate --isolate-allow 198.51.100.10
+postern-sensor ... --response kill,quarantine,isolate,prevent,rollback \
+  --isolate-allow 198.51.100.10 --protect /srv/data,/home
 ```
+
+- `prevent` (Linux, root): deny a program before it runs when its SHA-256 is
+  on the indicator list or its path is under a blocked prefix (Settings).
+- `rollback` with `--protect`: keep versioned copies of those directories,
+  refuse snapshots that look like mass encryption, restore on demand.
 
 Hosts run in `detect` mode by default. In `protect` mode, rules that declare a
 `response` queue those actions automatically.
+
+## Access control
+
+API keys and SSO sessions carry a role: `viewer` (read), `analyst` (also
+triage, respond, edit detections) or `admin` (also settings, keys, protect
+mode). Single sign-on is OpenID Connect; configure it under Settings and map
+emails, groups or domains to roles.
+
+## Vulnerabilities
+
+Sensors report installed packages; the server downloads the public OSV
+database for the distribution (Ubuntu, Debian) and matches locally. See the
+Exposure tab.
 
 ## Documentation
 
@@ -87,7 +107,9 @@ Hosts run in `detect` mode by default. In `protect` mode, rules that declare a
 ## Development
 
 ```sh
-cargo test          # rule validation, detection and parser tests
+cargo test              # rules, detections, parsers, vault, version ordering
+scripts/test-sso.sh     # SSO and role enforcement against a mock provider
+scripts/build-windows.sh  # cross-compile postern-sensor.exe (needs mingw-w64)
 scripts/build-site.sh   # regenerates site/index.html from site/page.html
 ```
 

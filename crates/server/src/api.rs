@@ -1,10 +1,10 @@
 //! HTTP API: sensor plane (enroll, telemetry, action results) and console
 //! plane (everything an operator or an integration calls).
 
-use crate::{ai, db, detect, AppState};
+use crate::{ai, db, detect, sso, vuln, AppState};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use postern_proto::{now_ms, Action, ActionResult, BatchResponse, EnrollRequest, EnrollResponse, Event, EventBatch};
@@ -48,12 +48,54 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// Authenticate a console / integration caller. Returns the key name.
-fn operator(conn: &Connection, headers: &HeaderMap) -> Result<String, ApiError> {
-    let token = bearer(headers).ok_or(ApiError(StatusCode::UNAUTHORIZED, "missing bearer token".into()))?;
-    conn.query_row("SELECT name FROM api_keys WHERE key_hash = ?1", [db::sha256_hex(&token)], |r| r.get(0))
-        .optional()?
-        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid token".into()))
+pub const VIEWER: u8 = 1;
+pub const ANALYST: u8 = 2;
+pub const ADMIN: u8 = 3;
+
+struct Who {
+    name: String,
+    role: String,
+    via: &'static str,
+}
+
+/// Identify the caller from a bearer token (API key) or an SSO session cookie.
+fn identify(conn: &Connection, headers: &HeaderMap) -> Result<Who, ApiError> {
+    if let Some(token) = bearer(headers) {
+        return conn
+            .query_row("SELECT name, role FROM api_keys WHERE key_hash = ?1", [db::sha256_hex(&token)], |r| {
+                Ok(Who { name: r.get(0)?, role: r.get(1)?, via: "token" })
+            })
+            .optional()?
+            .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid token".into()));
+    }
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|c| c.to_str().ok())
+        .and_then(|c| c.split(';').find_map(|kv| kv.trim().strip_prefix(&format!("{}=", sso::SESSION_COOKIE)).map(str::to_string)))
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "not signed in".into()))?;
+    // A cookie is sent automatically by the browser, so a request that relies
+    // on one must also carry a header another site cannot set.
+    if headers.get("x-postern-csrf").is_none() {
+        return Err(ApiError(StatusCode::FORBIDDEN, "missing X-Postern-CSRF header".into()));
+    }
+    conn.query_row(
+        "SELECT email, role FROM sessions WHERE token_hash = ?1 AND expires_at > ?2",
+        params![db::sha256_hex(&cookie), now_ms()],
+        |r| Ok(Who { name: r.get(0)?, role: r.get(1)?, via: "sso" }),
+    )
+    .optional()?
+    .ok_or(ApiError(StatusCode::UNAUTHORIZED, "session expired".into()))
+}
+
+/// Authenticate a console / integration caller and require a minimum role.
+/// Returns the caller's name for the audit log.
+fn operator(conn: &Connection, headers: &HeaderMap, need: u8) -> Result<String, ApiError> {
+    let who = identify(conn, headers)?;
+    if sso::role_rank(&who.role) < need {
+        let needed = ["", "viewer", "analyst", "admin"][need as usize];
+        return Err(ApiError(StatusCode::FORBIDDEN, format!("this needs the {needed} role; you are signed in as {}", who.role)));
+    }
+    Ok(who.name)
 }
 
 /// Authenticate a sensor. Returns (endpoint id, protection mode).
@@ -99,6 +141,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/settings/ai", post(set_ai))
         .route("/api/v1/settings/ai/test", post(test_ai))
         .route("/api/v1/keys", post(create_key))
+        .route("/api/v1/keys/:id/delete", post(delete_key))
+        .route("/api/v1/me", get(me))
+        .route("/api/v1/settings/sso", post(set_sso))
+        .route("/api/v1/settings/prevention", post(set_prevention))
+        .route("/api/v1/vulns", get(vulns))
+        .route("/api/v1/vulns/refresh", post(vulns_refresh))
+        .route("/auth/config", get(auth_config))
+        .route("/auth/oidc/login", get(oidc_login))
+        .route("/auth/oidc/callback", get(oidc_callback))
+        .route("/auth/logout", post(logout))
         .route("/api/v1/ai/triage/:id", post(ai_triage))
         .route("/api/v1/ai/hunt", post(ai_hunt))
         .route("/api/v1/ai/rule", post(ai_rule))
@@ -183,6 +235,7 @@ fn ingest(state: &AppState, conn: &Connection, endpoint_id: &str, mode: &str, so
                 "UPDATE endpoints SET inventory = ?1 WHERE id = ?2",
                 params![Value::Object(ev.fields.clone()).to_string(), endpoint_id],
             )?;
+            state.vuln_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
             continue;
         }
         conn.execute(
@@ -260,7 +313,16 @@ async fn sensor_events(State(s): St, headers: HeaderMap, Json(batch): Json<Event
         conn.execute("UPDATE actions SET status = 'sent' WHERE id = ?1", [&aid])?;
         actions.push(Action { id: aid, kind: a["kind"].as_str().unwrap_or_default().to_string(), params: a["params"].clone() });
     }
-    Ok(Json(BatchResponse { actions, mode }))
+    // Execution prevention applies only to hosts an admin put in protect mode.
+    let mut policy = postern_proto::Policy::default();
+    if mode == "protect" {
+        if db::get_setting(&conn, "prevent_hashes").as_deref() != Some("off") {
+            let mut st = conn.prepare("SELECT value FROM iocs WHERE kind = 'sha256' LIMIT 50000")?;
+            policy.block_hashes = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        }
+        policy.block_paths = db::get_setting(&conn, "prevent_paths").and_then(|p| serde_json::from_str(&p).ok()).unwrap_or_default();
+    }
+    Ok(Json(BatchResponse { actions, mode, policy }))
 }
 
 async fn action_result(State(s): St, headers: HeaderMap, Path(aid): Path<String>, Json(res): Json<ActionResult>) -> R {
@@ -278,7 +340,7 @@ async fn action_result(State(s): St, headers: HeaderMap, Path(aid): Path<String>
 
 async fn overview(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let now = now_ms();
     let day = now - 24 * 3_600_000;
     let one = |sql: &str, args: Vec<SqlV>| -> rusqlite::Result<i64> {
@@ -320,7 +382,7 @@ async fn overview(State(s): St, headers: HeaderMap) -> R {
 
 async fn endpoints(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     Ok(Json(json!(db::query(
         &conn,
         "SELECT e.id, e.hostname, e.os, e.arch, e.version, e.enrolled_at, e.last_seen, e.heartbeat, e.isolated, e.mode, \
@@ -332,7 +394,7 @@ async fn endpoints(State(s): St, headers: HeaderMap) -> R {
 
 async fn endpoint_detail(State(s): St, headers: HeaderMap, Path(id): Path<String>) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let ep = db::query(
         &conn,
         "SELECT id, hostname, os, arch, version, enrolled_at, last_seen, heartbeat, isolated, mode, inventory FROM endpoints WHERE id = ?1",
@@ -359,13 +421,15 @@ async fn endpoint_detail(State(s): St, headers: HeaderMap, Path(id): Path<String
 
 async fn request_action(State(s): St, headers: HeaderMap, Path(id): Path<String>, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ANALYST)?;
     let kind = b["kind"].as_str().unwrap_or_default();
     let p = b.get("params").cloned().unwrap_or(json!({}));
     match kind {
         "kill_process" if p["pid"].as_i64().is_some() => {}
         "quarantine_file" if p["path"].as_str().is_some_and(|x| x.starts_with('/')) => {}
-        "isolate_host" | "unisolate_host" | "collect_triage" => {}
+        "isolate_host" | "unisolate_host" | "collect_triage" | "vault_accept" => {}
+        "rollback_files" if p.get("path").is_none_or(|x| x.as_str().is_some_and(|x| x.starts_with('/') || x.contains(":\\"))) => {}
+        "rollback_files" => return Err(bad("rollback_files params.path must be an absolute path")),
         "kill_process" => return Err(bad("kill_process needs params.pid")),
         "quarantine_file" => return Err(bad("quarantine_file needs an absolute params.path")),
         _ => return Err(bad("unknown action kind")),
@@ -380,7 +444,7 @@ async fn request_action(State(s): St, headers: HeaderMap, Path(id): Path<String>
 
 async fn set_mode(State(s): St, headers: HeaderMap, Path(id): Path<String>, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ADMIN)?;
     let mode = b["mode"].as_str().unwrap_or_default();
     if !["detect", "protect"].contains(&mode) {
         return Err(bad("mode must be detect or protect"));
@@ -392,7 +456,7 @@ async fn set_mode(State(s): St, headers: HeaderMap, Path(id): Path<String>, Json
 
 async fn incidents(State(s): St, headers: HeaderMap, Query(q): Q) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let mut sql = String::from(
         "SELECT i.id, i.endpoint_id, p.hostname, i.title, i.severity, i.status, i.created_at, i.updated_at, i.alert_count, \
          json_extract(i.ai_verdict, '$.verdict') AS verdict FROM incidents i LEFT JOIN endpoints p ON p.id = i.endpoint_id",
@@ -412,7 +476,7 @@ async fn incidents(State(s): St, headers: HeaderMap, Query(q): Q) -> R {
 
 async fn incident_detail(State(s): St, headers: HeaderMap, Path(id): Path<i64>) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let inc = db::query(
         &conn,
         "SELECT i.*, p.hostname FROM incidents i LEFT JOIN endpoints p ON p.id = i.endpoint_id WHERE i.id = ?1",
@@ -439,7 +503,7 @@ async fn incident_detail(State(s): St, headers: HeaderMap, Path(id): Path<i64>) 
 
 async fn incident_status(State(s): St, headers: HeaderMap, Path(id): Path<i64>, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ANALYST)?;
     let status = b["status"].as_str().unwrap_or_default();
     if !["open", "investigating", "resolved", "false_positive"].contains(&status) {
         return Err(bad("status must be open, investigating, resolved or false_positive"));
@@ -451,7 +515,7 @@ async fn incident_status(State(s): St, headers: HeaderMap, Path(id): Path<i64>, 
 
 async fn alerts(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     Ok(Json(json!(db::query(
         &conn,
         "SELECT a.id, a.ts, p.hostname, a.rule_id, a.title, a.severity, a.mitre, a.event_id, a.incident_id \
@@ -462,7 +526,7 @@ async fn alerts(State(s): St, headers: HeaderMap) -> R {
 
 async fn events(State(s): St, headers: HeaderMap, Query(q): Q) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let mins: i64 = q.get("since_minutes").and_then(|v| v.parse().ok()).unwrap_or(60);
     let mut sql = String::from(
         "SELECT e.id, e.ts, e.endpoint_id, p.hostname, e.kind, e.source, e.fields FROM events e \
@@ -488,7 +552,7 @@ async fn events(State(s): St, headers: HeaderMap, Query(q): Q) -> R {
 
 async fn actions(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     Ok(Json(json!(db::query(
         &conn,
         "SELECT a.id, p.hostname, a.kind, a.params, a.status, a.requested_by, a.created_at, a.completed_at, a.output \
@@ -499,7 +563,7 @@ async fn actions(State(s): St, headers: HeaderMap) -> R {
 
 async fn rules(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     let rows = db::query(&conn, "SELECT id, yaml, enabled, source, updated_at FROM rules ORDER BY id", vec![])?;
     let out: Vec<Value> = rows
         .into_iter()
@@ -522,7 +586,7 @@ async fn rules(State(s): St, headers: HeaderMap) -> R {
 async fn save_rule(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
     let saved = {
         let conn = s.db.lock().unwrap();
-        let who = operator(&conn, &headers)?;
+        let who = operator(&conn, &headers, ANALYST)?;
         let parsed = detect::parse_rules(b["yaml"].as_str().unwrap_or_default()).map_err(|e| bad(e.to_string()))?;
         let source = if b["source"] == "ai" { "ai" } else { "custom" };
         let mut ids = Vec::new();
@@ -551,7 +615,7 @@ async fn save_rule(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R 
 async fn toggle_rule(State(s): St, headers: HeaderMap, Path(id): Path<String>, Json(b): Json<Value>) -> R {
     {
         let conn = s.db.lock().unwrap();
-        let who = operator(&conn, &headers)?;
+        let who = operator(&conn, &headers, ANALYST)?;
         let on = b["enabled"].as_bool().unwrap_or(true);
         conn.execute("UPDATE rules SET enabled = ?1 WHERE id = ?2", params![on as i64, id])?;
         db::audit(&conn, &who, "rule.toggle", &format!("{id} enabled={on}"));
@@ -563,7 +627,7 @@ async fn toggle_rule(State(s): St, headers: HeaderMap, Path(id): Path<String>, J
 async fn delete_rule(State(s): St, headers: HeaderMap, Path(id): Path<String>) -> R {
     let n = {
         let conn = s.db.lock().unwrap();
-        let who = operator(&conn, &headers)?;
+        let who = operator(&conn, &headers, ANALYST)?;
         let n = conn.execute("DELETE FROM rules WHERE id = ?1 AND source != 'builtin'", [&id])?;
         db::audit(&conn, &who, "rule.delete", &id);
         n
@@ -577,13 +641,13 @@ async fn delete_rule(State(s): St, headers: HeaderMap, Path(id): Path<String>) -
 
 async fn iocs(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     Ok(Json(json!(db::query(&conn, "SELECT id, kind, value, note, created_at FROM iocs ORDER BY created_at DESC LIMIT 2000", vec![])?)))
 }
 
 async fn add_ioc(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ANALYST)?;
     let kind = b["kind"].as_str().unwrap_or_default();
     let value = b["value"].as_str().unwrap_or_default().trim().to_lowercase();
     let ok = match kind {
@@ -604,7 +668,7 @@ async fn add_ioc(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
 
 async fn delete_ioc(State(s): St, headers: HeaderMap, Path(id): Path<i64>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ANALYST)?;
     let n = conn.execute("DELETE FROM iocs WHERE id = ?1", [id])?;
     db::audit(&conn, &who, "ioc.delete", &id.to_string());
     Ok(Json(json!({"deleted": n})))
@@ -614,7 +678,7 @@ async fn delete_ioc(State(s): St, headers: HeaderMap, Path(id): Path<i64>) -> R 
 /// posted as events and run through the same detections.
 async fn ingest_external(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ANALYST)?;
     let source: String = b["source"]
         .as_str()
         .unwrap_or("external")
@@ -649,25 +713,43 @@ async fn ingest_external(State(s): St, headers: HeaderMap, Json(b): Json<Value>)
 
 async fn audit_log(State(s): St, headers: HeaderMap) -> R {
     let conn = s.db.lock().unwrap();
-    operator(&conn, &headers)?;
+    operator(&conn, &headers, VIEWER)?;
     Ok(Json(json!(db::query(&conn, "SELECT ts, actor, action, detail FROM audit ORDER BY id DESC LIMIT 300", vec![])?)))
 }
 
 async fn settings(State(s): St, headers: HeaderMap) -> R {
-    let (enroll, stored_key, keys) = {
+    let (admin, enroll, stored_key, keys, prevention, sso_cfg, vuln_last) = {
         let conn = s.db.lock().unwrap();
-        operator(&conn, &headers)?;
+        let who = identify(&conn, &headers)?;
+        let admin = who.role == "admin";
+        let get = |k: &str| db::get_setting(&conn, k).unwrap_or_default();
         (
-            db::get_setting(&conn, "enroll_token").unwrap_or_default(),
-            db::get_setting(&conn, "ai_api_key").is_some_and(|k| !k.is_empty()),
+            admin,
+            get("enroll_token"),
+            !get("ai_api_key").is_empty(),
             db::query(&conn, "SELECT id, name, role, created_at FROM api_keys ORDER BY id", vec![])?,
+            json!({
+                "block_ioc_hashes": get("prevent_hashes") != "off",
+                "block_paths": serde_json::from_str::<Value>(&get("prevent_paths")).unwrap_or(json!([])),
+            }),
+            json!({
+                "issuer": get("sso_issuer"), "client_id": get("sso_client_id"), "base_url": get("sso_base_url"),
+                "secret_set": !get("sso_client_secret").is_empty(),
+                "role_map": serde_json::from_str::<Value>(&get("sso_role_map")).unwrap_or(json!({"emails": {}, "groups": {}, "domains": {}, "default": ""})),
+                "enabled": sso::config(&conn).is_some(),
+            }),
+            get("vuln_last_run").parse::<i64>().unwrap_or(0),
         )
     };
     let cfg = ai::config(&s);
     Ok(Json(json!({
         "version": postern_proto::VERSION,
-        "enroll_token": enroll,
-        "api_keys": keys,
+        "is_admin": admin,
+        "enroll_token": if admin { enroll } else { String::new() },
+        "api_keys": if admin { json!(keys) } else { json!([]) },
+        "prevention": prevention,
+        "sso": if admin { sso_cfg } else { json!({"enabled": sso_cfg["enabled"]}) },
+        "vuln_last_run": vuln_last,
         "ai": {
             "configured": cfg.is_some(),
             "key_source": if stored_key { "console" } else if cfg.is_some() { "environment" } else { "none" },
@@ -680,7 +762,7 @@ async fn settings(State(s): St, headers: HeaderMap) -> R {
 
 async fn set_ai(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ADMIN)?;
     if let Some(k) = b["api_key"].as_str() {
         db::set_setting(&conn, "ai_api_key", k.trim())?;
         db::audit(&conn, &who, "settings.ai_key", if k.trim().is_empty() { "cleared" } else { "updated" });
@@ -706,20 +788,24 @@ async fn set_ai(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
 
 async fn create_key(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
     let conn = s.db.lock().unwrap();
-    let who = operator(&conn, &headers)?;
+    let who = operator(&conn, &headers, ADMIN)?;
     let name: String = b["name"].as_str().unwrap_or("integration").chars().take(64).collect();
+    let role = b["role"].as_str().unwrap_or("analyst");
+    if !sso::valid_role(role) {
+        return Err(bad("role must be viewer, analyst or admin"));
+    }
     let key = db::random_token("pck");
     conn.execute(
-        "INSERT INTO api_keys(name, key_hash, role, created_at) VALUES (?1, ?2, 'operator', ?3)",
-        params![name, db::sha256_hex(&key), now_ms()],
+        "INSERT INTO api_keys(name, key_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![name, db::sha256_hex(&key), role, now_ms()],
     )?;
-    db::audit(&conn, &who, "key.create", &name);
-    Ok(Json(json!({"name": name, "key": key, "note": "shown once; store it now"})))
+    db::audit(&conn, &who, "key.create", &format!("{name} ({role})"));
+    Ok(Json(json!({"name": name, "role": role, "key": key, "note": "shown once; store it now"})))
 }
 
-fn check_operator(s: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
+fn check_operator(s: &AppState, headers: &HeaderMap, need: u8) -> Result<String, ApiError> {
     let conn = s.db.lock().unwrap();
-    operator(&conn, headers)
+    operator(&conn, headers, need)
 }
 
 fn log_ai(s: &AppState, who: &str, what: &str) {
@@ -728,18 +814,18 @@ fn log_ai(s: &AppState, who: &str, what: &str) {
 }
 
 async fn test_ai(State(s): St, headers: HeaderMap) -> R {
-    check_operator(&s, &headers)?;
+    check_operator(&s, &headers, ADMIN)?;
     Ok(Json(ai::ping(&s).await?))
 }
 
 async fn ai_triage(State(s): St, headers: HeaderMap, Path(id): Path<i64>) -> R {
-    let who = check_operator(&s, &headers)?;
+    let who = check_operator(&s, &headers, ANALYST)?;
     log_ai(&s, &who, &format!("triage incident #{id}"));
     Ok(Json(ai::triage(&s, id).await?))
 }
 
 async fn ai_hunt(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
-    let who = check_operator(&s, &headers)?;
+    let who = check_operator(&s, &headers, ANALYST)?;
     let q = b["question"].as_str().unwrap_or_default().trim();
     if q.is_empty() {
         return Err(bad("question is required"));
@@ -749,11 +835,166 @@ async fn ai_hunt(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
 }
 
 async fn ai_rule(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
-    let who = check_operator(&s, &headers)?;
+    let who = check_operator(&s, &headers, ANALYST)?;
     let d = b["description"].as_str().unwrap_or_default().trim();
     if d.is_empty() {
         return Err(bad("description is required"));
     }
     log_ai(&s, &who, &format!("draft rule: {}", d.chars().take(200).collect::<String>()));
     Ok(Json(ai::draft_rule(&s, d).await?))
+}
+
+// ------------------------------------------------- identity, SSO and policy
+
+async fn me(State(s): St, headers: HeaderMap) -> R {
+    let conn = s.db.lock().unwrap();
+    let who = identify(&conn, &headers)?;
+    Ok(Json(json!({"name": who.name, "role": who.role, "via": who.via})))
+}
+
+async fn delete_key(State(s): St, headers: HeaderMap, Path(id): Path<i64>) -> R {
+    let conn = s.db.lock().unwrap();
+    let who = operator(&conn, &headers, ADMIN)?;
+    let admins: i64 = conn.query_row("SELECT COUNT(*) FROM api_keys WHERE role = 'admin' AND id != ?1", [id], |r| r.get(0))?;
+    if admins == 0 {
+        return Err(bad("this is the last admin key; create another admin key first"));
+    }
+    let n = conn.execute("DELETE FROM api_keys WHERE id = ?1", [id])?;
+    db::audit(&conn, &who, "key.delete", &id.to_string());
+    Ok(Json(json!({"deleted": n})))
+}
+
+async fn set_sso(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
+    let conn = s.db.lock().unwrap();
+    let who = operator(&conn, &headers, ADMIN)?;
+    for (field, key) in [("issuer", "sso_issuer"), ("client_id", "sso_client_id"), ("base_url", "sso_base_url")] {
+        if let Some(v) = b[field].as_str() {
+            let v = v.trim();
+            if !v.is_empty() && field != "client_id" && !(v.starts_with("https://") || v.starts_with("http://localhost") || v.starts_with("http://127.0.0.1")) {
+                return Err(bad(format!("{field} must be an https:// URL")));
+            }
+            db::set_setting(&conn, key, v)?;
+        }
+    }
+    if let Some(v) = b["client_secret"].as_str().filter(|v| !v.is_empty()) {
+        db::set_setting(&conn, "sso_client_secret", v.trim())?;
+    }
+    if let Some(map) = b.get("role_map").filter(|m| m.is_object()) {
+        for section in ["emails", "groups", "domains"] {
+            for (k, r) in map[section].as_object().into_iter().flatten() {
+                if !r.as_str().is_some_and(sso::valid_role) {
+                    return Err(bad(format!("role for {k} must be viewer, analyst or admin")));
+                }
+            }
+        }
+        if !map["default"].as_str().is_none_or(|d| d.is_empty() || sso::valid_role(d)) {
+            return Err(bad("default role must be empty, viewer, analyst or admin"));
+        }
+        db::set_setting(&conn, "sso_role_map", &map.to_string())?;
+    }
+    db::audit(&conn, &who, "settings.sso", "updated");
+    Ok(Json(json!({"ok": true, "enabled": sso::config(&conn).is_some()})))
+}
+
+async fn set_prevention(State(s): St, headers: HeaderMap, Json(b): Json<Value>) -> R {
+    let conn = s.db.lock().unwrap();
+    let who = operator(&conn, &headers, ADMIN)?;
+    if let Some(on) = b["block_ioc_hashes"].as_bool() {
+        db::set_setting(&conn, "prevent_hashes", if on { "on" } else { "off" })?;
+    }
+    if let Some(paths) = b["block_paths"].as_array() {
+        let mut clean = Vec::new();
+        for p in paths.iter().filter_map(|p| p.as_str()).map(str::trim).filter(|p| !p.is_empty()) {
+            // A prefix this short would stop the host from running anything.
+            let system = ["/", "/usr", "/usr/", "/bin", "/bin/", "/sbin", "/sbin/", "/lib", "/lib/", "/usr/bin", "/usr/bin/", "/usr/sbin/", "/usr/lib/", "/etc", "/etc/", "/opt", "/opt/"];
+            if !p.starts_with('/') || system.contains(&p) {
+                return Err(bad(format!("`{p}` is not allowed: use an absolute prefix outside the system directories, e.g. /dev/shm/")));
+            }
+            clean.push(p.to_string());
+        }
+        db::set_setting(&conn, "prevent_paths", &json!(clean).to_string())?;
+    }
+    db::audit(&conn, &who, "settings.prevention", &b.to_string());
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn vulns(State(s): St, headers: HeaderMap, Query(q): Q) -> R {
+    let conn = s.db.lock().unwrap();
+    operator(&conn, &headers, VIEWER)?;
+    let summary = db::query(
+        &conn,
+        "SELECT p.id AS endpoint_id, p.hostname, json_extract(p.inventory, '$.os') AS os, \
+         SUM(v.severity = 'critical') AS critical, SUM(v.severity = 'high') AS high, SUM(v.severity = 'medium') AS medium, \
+         SUM(v.severity NOT IN ('critical','high','medium')) AS other, SUM(v.fixed IS NOT NULL) AS fixable, COUNT(v.vuln_id) AS total \
+         FROM endpoints p LEFT JOIN endpoint_vulns v ON v.endpoint_id = p.id WHERE p.os != 'external' GROUP BY p.id ORDER BY p.hostname",
+        vec![],
+    )?;
+    let mut sql = String::from(
+        "SELECT v.vuln_id, p.hostname, v.package, v.installed, v.fixed, v.severity, v.summary, v.published \
+         FROM endpoint_vulns v JOIN endpoints p ON p.id = v.endpoint_id",
+    );
+    let mut args = vec![];
+    if let Some(ep) = q.get("endpoint").filter(|e| !e.is_empty()) {
+        args.push(SqlV::Text(ep.clone()));
+        sql.push_str(" WHERE v.endpoint_id = ?1");
+    }
+    sql.push_str(
+        " ORDER BY CASE v.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, \
+         (v.fixed IS NULL), v.published DESC LIMIT 500",
+    );
+    Ok(Json(json!({
+        "summary": summary,
+        "findings": db::query(&conn, &sql, args)?,
+        "last_run": db::get_setting(&conn, "vuln_last_run").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
+    })))
+}
+
+async fn vulns_refresh(State(s): St, headers: HeaderMap) -> R {
+    let who = check_operator(&s, &headers, ADMIN)?;
+    log_ai(&s, &who, "vulnerability feed refresh");
+    Ok(Json(vuln::refresh(&s, true).await?))
+}
+
+async fn auth_config(State(s): St) -> Json<Value> {
+    let conn = s.db.lock().unwrap();
+    Json(json!({"sso": sso::config(&conn).is_some()}))
+}
+
+fn login_error(msg: &str) -> Response {
+    let safe: String = msg.chars().filter(|c| c.is_ascii_alphanumeric() || " .,:;@-_()`'".contains(*c)).take(240).collect();
+    Redirect::to(&format!("/?login_error={}", safe.replace(' ', "+"))).into_response()
+}
+
+async fn oidc_login(State(s): St) -> Response {
+    match sso::begin(&s).await {
+        Ok(url) => Redirect::to(&url).into_response(),
+        Err(e) => login_error(&e.to_string()),
+    }
+}
+
+async fn oidc_callback(State(s): St, Query(q): Q) -> Response {
+    if let Some(err) = q.get("error") {
+        return login_error(&format!("provider returned {err}"));
+    }
+    let (Some(code), Some(st)) = (q.get("code"), q.get("state")) else {
+        return login_error("the provider response is missing code or state");
+    };
+    match sso::finish(&s, code, st).await {
+        Ok(session) => (
+            [(header::SET_COOKIE, sso::cookie(&session.token, session.secure, sso::session_max_age()))],
+            Redirect::to("/"),
+        )
+            .into_response(),
+        Err(e) => login_error(&e.to_string()),
+    }
+}
+
+async fn logout(State(s): St, headers: HeaderMap) -> Response {
+    let conn = s.db.lock().unwrap();
+    if let Some(c) = headers.get(header::COOKIE).and_then(|c| c.to_str().ok()) {
+        if let Some(tok) = c.split(';').find_map(|kv| kv.trim().strip_prefix(&format!("{}=", sso::SESSION_COOKIE))) {
+            let _ = conn.execute("DELETE FROM sessions WHERE token_hash = ?1", [db::sha256_hex(tok)]);
+        }
+    }
+    ([(header::SET_COOKIE, sso::cookie("", false, 0))], Json(json!({"ok": true}))).into_response()
 }

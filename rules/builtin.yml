@@ -348,3 +348,205 @@
     all:
       - { field: process.cmdline, op: regex, value: '(?i)(transfer\.sh|file\.io|0x0\.st|pastebin\.com|termbin\.com|anonfiles|paste\.ee|ix\.io)' }
       - { field: process.name, op: in, value: [curl, wget, nc, python3, python] }
+
+# ---- Prevention and ransomware signals raised by the sensor itself ----
+
+- id: PC-PREV-001
+  title: Execution blocked by policy
+  description: The exec guard denied a program before it ran because its hash or path is on the block list.
+  severity: high
+  mitre: [T1204.002]
+  kind: exec_blocked
+  match:
+    all:
+      - { field: file.path, op: exists }
+
+- id: PC-RANSOM-001
+  title: Ransomware canary file touched
+  description: A decoy file in a protected directory was modified or deleted. Nothing legitimate writes to these files.
+  severity: critical
+  mitre: [T1486]
+  kind: ransomware_canary
+  match:
+    all:
+      - { field: file.path, op: exists }
+  response: [isolate_host]
+
+- id: PC-RANSOM-002
+  title: Mass encryption of protected files
+  description: Most files in a protected directory changed to high-entropy content since the last snapshot. The vault kept the last good snapshot for rollback.
+  severity: critical
+  mitre: [T1486]
+  kind: ransomware_suspected
+  match:
+    all:
+      - { field: ransomware.signal, op: exists }
+  response: [isolate_host]
+
+- id: PC-RANSOM-003
+  title: Backup or shadow copy destruction
+  description: Deletion of volume shadow copies, backup catalogs or boot recovery, the usual step before encryption.
+  severity: critical
+  mitre: [T1490]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)vssadmin(\.exe)?\s+(delete\s+shadows|resize\s+shadowstorage)' }
+      - { field: process.cmdline, op: regex, value: '(?i)wmic(\.exe)?\s+shadowcopy\s+delete' }
+      - { field: process.cmdline, op: regex, value: '(?i)bcdedit(\.exe)?\s+/set\s+.*(recoveryenabled\s+no|bootstatuspolicy\s+ignoreallfailures)' }
+      - { field: process.cmdline, op: regex, value: '(?i)wbadmin(\.exe)?\s+delete\s+(catalog|systemstatebackup)' }
+      - { field: process.cmdline, op: regex, value: '(?i)Get-WmiObject\s+Win32_ShadowCopy.*Delete\(' }
+  response: [kill_process, isolate_host]
+
+# ---- Windows ----
+
+- id: PC-WIN-001
+  title: PowerShell with an encoded or hidden command
+  description: PowerShell started with an encoded payload, a hidden window or execution-policy bypass.
+  severity: high
+  mitre: [T1059.001, T1027]
+  kind: process_start
+  match:
+    all:
+      - { field: process.name, op: regex, value: '(?i)^(powershell|pwsh)(\.exe)?$' }
+      - { field: process.cmdline, op: regex, value: '(?i)\s-(e|ec|enc|encodedcommand)\s+[A-Za-z0-9+/=]{40,}|-w(indowstyle)?\s+hidden|-nop\b.*-(exec|ep)\s+bypass' }
+
+- id: PC-WIN-002
+  title: PowerShell download cradle
+  description: PowerShell fetching and executing remote content in one command.
+  severity: high
+  mitre: [T1059.001, T1105]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)(IEX|Invoke-Expression)\b.*(New-Object\s+Net\.WebClient|DownloadString|Invoke-WebRequest|iwr\b|Invoke-RestMethod|irm\b)' }
+
+- id: PC-WIN-003
+  title: Signed binary used as a download or execution proxy
+  description: certutil, mshta, regsvr32, rundll32, bitsadmin or msiexec fetching or running remote content.
+  severity: high
+  mitre: [T1218, T1105]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)certutil(\.exe)?\s+.*-(urlcache|decode|decodehex)\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)mshta(\.exe)?\s+.*(https?:|javascript:|vbscript:)' }
+      - { field: process.cmdline, op: regex, value: '(?i)regsvr32(\.exe)?\s+.*/i:https?:' }
+      - { field: process.cmdline, op: regex, value: '(?i)rundll32(\.exe)?\s+.*(javascript:|\\\\[0-9a-z.]+\\|,\s*#\d+\s+https?:)' }
+      - { field: process.cmdline, op: regex, value: '(?i)bitsadmin(\.exe)?\s+.*/transfer\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)msiexec(\.exe)?\s+.*/i\s+https?:' }
+
+- id: PC-WIN-004
+  title: Office or browser spawned a script host or shell
+  description: A document or browser process is the parent of cmd, PowerShell or a script host. Typical of a malicious document.
+  severity: critical
+  mitre: [T1566.001, T1204.002]
+  kind: process_start
+  match:
+    all:
+      - { field: process.parent_name, op: regex, value: '(?i)^(winword|excel|powerpnt|outlook|msaccess|onenote|acrord32|acrobat)(\.exe)?$' }
+      - { field: process.name, op: regex, value: '(?i)^(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32)(\.exe)?$' }
+  response: [kill_process]
+
+- id: PC-WIN-005
+  title: LSASS memory dump
+  description: Tools and techniques that dump the LSASS process to steal credentials.
+  severity: critical
+  mitre: [T1003.001]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)comsvcs(\.dll)?[, ]+\s*(#24|MiniDump)' }
+      - { field: process.cmdline, op: regex, value: '(?i)procdump(64)?(\.exe)?\s+.*lsass' }
+      - { field: process.cmdline, op: regex, value: '(?i)(mimikatz|sekurlsa::|lsadump::|nanodump|dumpert)' }
+      - { field: process.name, op: regex, value: '(?i)^(mimikatz|nanodump|rubeus|sharphound|lazagne)(\.exe)?$' }
+  response: [kill_process]
+
+- id: PC-WIN-006
+  title: Registry hive saved for offline credential theft
+  description: SAM, SYSTEM or SECURITY hive exported with reg.exe.
+  severity: high
+  mitre: [T1003.002]
+  kind: process_start
+  match:
+    all:
+      - { field: process.cmdline, op: regex, value: '(?i)reg(\.exe)?\s+(save|export)\s+hklm\\(sam|system|security)\b' }
+
+- id: PC-WIN-007
+  title: Persistence through a Run key or scheduled task
+  description: A Run/RunOnce registry value or a scheduled task created from the command line.
+  severity: medium
+  mitre: [T1547.001, T1053.005]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)reg(\.exe)?\s+add\s+.*\\CurrentVersion\\Run(Once)?\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)schtasks(\.exe)?\s+.*/create\b.*(/ru\s+system|powershell|cmd(\.exe)?\s+/c|\\AppData\\|\\Temp\\|\\Users\\Public\\)' }
+
+- id: PC-WIN-008
+  title: Local account created or added to Administrators
+  description: net.exe creating a user or adding one to a privileged group.
+  severity: medium
+  mitre: [T1136.001, T1098]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)\bnet1?(\.exe)?\s+user\s+\S+\s+.*/add\b' }
+      - { field: process.cmdline, op: regex, value: '(?i)\bnet1?(\.exe)?\s+localgroup\s+("?administrators"?|"?remote desktop users"?)\s+.*/add\b' }
+
+- id: PC-WIN-009
+  title: Microsoft Defender or firewall disabled
+  description: Real-time protection, tamper settings or the Windows Firewall switched off from the command line.
+  severity: high
+  mitre: [T1562.001, T1562.004]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)Set-MpPreference\s+.*-Disable(RealtimeMonitoring|BehaviorMonitoring|IOAVProtection)\s+(\$true|1)' }
+      - { field: process.cmdline, op: regex, value: '(?i)Add-MpPreference\s+.*-ExclusionPath' }
+      - { field: process.cmdline, op: regex, value: '(?i)netsh(\.exe)?\s+(advfirewall\s+set\s+\w+\s+state\s+off|firewall\s+set\s+opmode\s+disable)' }
+      - { field: process.cmdline, op: regex, value: '(?i)sc(\.exe)?\s+(stop|config|delete)\s+(WinDefend|Sense|PosternSensor)\b' }
+
+- id: PC-WIN-010
+  title: Windows event log cleared
+  description: Security or system logs wiped to remove traces.
+  severity: high
+  mitre: [T1070.001]
+  kind: process_start
+  match:
+    any:
+      - { field: process.cmdline, op: regex, value: '(?i)wevtutil(\.exe)?\s+(cl|clear-log)\s' }
+      - { field: process.cmdline, op: regex, value: '(?i)Clear-EventLog\b|Remove-EventLog\b' }
+
+- id: PC-WIN-011
+  title: Remote execution tooling
+  description: PsExec-style service execution or WMI process creation, common in lateral movement.
+  severity: medium
+  mitre: [T1569.002, T1047]
+  kind: process_start
+  match:
+    any:
+      - { field: process.name, op: regex, value: '(?i)^(psexec|psexec64|paexec|psexesvc)(\.exe)?$' }
+      - { field: process.cmdline, op: regex, value: '(?i)wmic(\.exe)?\s+.*(/node:|process\s+call\s+create)' }
+
+- id: PC-WIN-012
+  title: Execution from a user-writable Windows directory
+  description: A binary started from Temp, Public or a Downloads folder.
+  severity: low
+  mitre: [T1036, T1204.002]
+  kind: process_start
+  match:
+    all:
+      - { field: process.exe, op: regex, value: '(?i)^[a-z]:\\(Users\\Public\\|Windows\\Temp\\|Users\\[^\\]+\\(AppData\\Local\\Temp|Downloads)\\).+\.(exe|scr|com|pif)$' }
+
+- id: PC-WIN-013
+  title: Windows logon brute force
+  description: Many failed network or Remote Desktop logons from one source address.
+  severity: high
+  mitre: [T1110.001]
+  kind: auth
+  match:
+    all:
+      - { field: auth.result, op: eq, value: failure }
+      - { field: auth.service, op: eq, value: windows-logon }
+  threshold: { count: 10, window_secs: 120, group_by: auth.source_ip }

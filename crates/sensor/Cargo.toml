@@ -13,5 +13,12 @@ sha2.workspace = true
 hex.workspace = true
 clap.workspace = true
 sysinfo = "0.30"
+
+[target.'cfg(not(windows))'.dependencies]
 ureq = { version = "2", features = ["json"] }
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# SChannel instead of rustls/ring: no C toolchain needed to build for Windows.
+ureq = { version = "2", default-features = false, features = ["json", "native-tls"] }
+native-tls = "0.2"

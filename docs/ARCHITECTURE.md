@@ -17,7 +17,10 @@ One process, one loop. Collectors poll and diff against their own baseline:
 
 | Collector | Interval | Event kind |
 |---|---|---|
-| Processes (sysinfo) | 2 s | `process_start` |
+| Processes: kernel process connector (Linux, root) | pushed | `process_start` |
+| Processes: poll (other platforms, and reconciliation) | 2 s / 10 s | `process_start` |
+| Exec guard: fanotify (Linux, root) | pushed | `exec_blocked` |
+| Vault canaries / snapshots (`--protect`) | 5 s / 15 min | `ransomware_canary`, `ransomware_suspected` |
 | Auth log | 5 s | `auth` |
 | Sockets (`ss` / `lsof`) | 10 s | `net_conn`, `listen_port` |
 | File integrity | 30 s | `file_change` |
@@ -27,6 +30,34 @@ Events are buffered (20,000 max) and uploaded every 5 s. A failed upload keeps
 the batch for the next attempt. The upload response carries pending response
 actions; the sensor executes those it has the capability for and reports the
 result.
+
+## Kernel sources (Linux)
+
+Two stable kernel interfaces, no module and no eBPF toolchain:
+
+- **Process connector** (netlink `cn_proc`). The kernel sends an event per
+  exec. The sensor reads `/proc/<pid>` at once. If the process is already
+  gone, the record is completed from the exec guard's cache (path and hash,
+  `process.short_lived`).
+- **Exec guard** (fanotify, `FAN_OPEN_EXEC` or `FAN_OPEN_EXEC_PERM`). Marks
+  are placed per mount, never per filesystem, so a sensor in a container
+  cannot affect the host. Without the `prevent` capability the guard only
+  observes. With it, each exec waits for a verdict: deny when the host is in
+  `protect` mode and the file's SHA-256 is on the block list or its path is
+  under a blocked prefix. Every error path allows.
+
+The execution policy (`block_hashes`, `block_paths`) comes back with every
+upload and is kept on disk for the next start.
+
+## Ransomware vault
+
+`--protect <dir>` keeps a content-addressed store (`vault/objects/<sha256>`)
+and one manifest per snapshot. A pass is refused, and
+`ransomware_suspected` raised, when at least 20 known files changed and 60 %
+of them went from low to high entropy, or when 30 % of known files vanished
+while mostly high-entropy files appeared. `rollback_files` restores a
+manifest and moves unknown files to `vault/rollback-<ts>/`. `vault_accept`
+tells the sensor the mass change was legitimate.
 
 ## Event model
 
@@ -47,6 +78,12 @@ result.
   maximum of its alerts.
 - **Respond**: actions are rows in a queue (`pending → sent → done|failed`).
   Sources are an operator or, in `protect` mode, the rule's `response` list.
+- **Vulnerabilities** (`vuln.rs`): when an inventory changes, and daily, the
+  OSV feed for each distribution in use is downloaded to
+  `<data-dir>/feeds/` and scanned; findings land in `endpoint_vulns`.
+- **Identity** (`sso.rs`): OpenID Connect authorization-code flow with PKCE;
+  sessions are an HttpOnly, SameSite=Lax cookie and every cookie-authenticated
+  request must carry `X-Postern-CSRF`.
 - **Retention**: events older than `--retention-days` are deleted hourly,
   except those referenced by an alert.
 
@@ -65,6 +102,11 @@ Console plane (admin token or API key, `Authorization: Bearer`):
 - `POST /api/v1/rules | rules/{id}/toggle | rules/{id}/delete | iocs | iocs/{id}/delete | keys`
 - `POST /api/v1/ingest` for third-party events: `{"source": "fw-1", "events": [{"kind": "...", "fields": {...}}]}`
 - `POST /api/v1/ai/triage/{id} | ai/hunt | ai/rule | settings/ai | settings/ai/test`
+- `GET /api/v1/me | vulns`, `POST /api/v1/vulns/refresh | settings/sso | settings/prevention | keys/{id}/delete`
+- `GET /auth/config | /auth/oidc/login | /auth/oidc/callback`, `POST /auth/logout`
+
+Minimum role: `GET` routes viewer; actions, incidents, rules, indicators,
+ingest and AI analyst; endpoint mode, settings, keys and feed refresh admin.
 
 ## AI analyst
 
@@ -84,7 +126,7 @@ Rust SDK), `anthropic-version: 2026-10-21`.
 
 ## Security model
 
-- Tokens (admin, API keys, agent keys) are stored as SHA-256 hashes. The
+- Tokens (admin, API keys, agent keys, SSO sessions) are stored as SHA-256 hashes. The
   enrollment token and an API key saved through the console are stored in
   clear text in the database; protect the data directory.
 - Telemetry is attacker-influenced. The console escapes every rendered value.

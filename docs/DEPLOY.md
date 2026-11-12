@@ -44,6 +44,54 @@ Before granting `isolate`, set `POSTERN_ISOLATE_ALLOW` to your admin address.
 An isolated host accepts traffic only from the management server and that
 list.
 
+## Kernel features and prevention (Linux)
+
+As root the sensor uses kernel process events and the exec guard
+automatically (`processes=kernel exec_guard=observe` in its start line).
+To let it deny execution:
+
+```
+POSTERN_RESPONSE=prevent
+```
+
+then put the host in `protect` mode and set the policy under Settings.
+Read "Known hazards" in COVERAGE.md first.
+
+## Ransomware rollback
+
+```
+POSTERN_PROTECT=/srv/data,/home
+POSTERN_RESPONSE=rollback
+```
+
+The vault is at `<state-dir>/vault` (root only). Size it with
+`POSTERN_VAULT_MAX_GB` (default 20) and `POSTERN_VAULT_INTERVAL` (seconds,
+default 900).
+
+## Windows sensor
+
+```sh
+scripts/build-windows.sh        # produces target/x86_64-pc-windows-gnu/release/postern-sensor.exe
+```
+
+On the Windows host, from an elevated prompt:
+
+```
+postern-sensor.exe --server https://console.example.com --enroll-token pce_...
+sc create PosternSensor binPath= "C:\Program Files\Postern\postern-sensor.exe --server https://console.example.com" start= auto
+```
+
+State lives in `%ProgramData%\PosternSensor`. The executable is not yet a
+native service (it does not answer the service control manager), so run it
+from Task Scheduler at startup or under a service wrapper.
+
+## Single sign-on
+
+Create an OpenID Connect "web application" client at your provider with the
+redirect URI `https://<console>/auth/oidc/callback`, then fill Issuer, Client
+ID, Client secret and the role mapping under Settings. Keep at least one
+admin API key as a break-glass credential.
+
 ## Website
 
 `site/index.html` is a static file (`scripts/build-site.sh` regenerates it

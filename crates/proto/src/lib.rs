@@ -69,6 +69,38 @@ pub struct Heartbeat {
     pub isolated: bool,
     /// Response actions this sensor was started with permission to execute.
     pub response_caps: Vec<String>,
+    /// How process starts are observed: `kernel` (pushed by the kernel) or `poll`.
+    #[serde(default)]
+    pub process_source: String,
+    /// `enforce` (execution can be denied), `observe` or `off`.
+    #[serde(default)]
+    pub exec_guard: String,
+    #[serde(default)]
+    pub vault: Option<VaultStatus>,
+}
+
+/// State of the ransomware-rollback vault on a sensor.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VaultStatus {
+    pub protected: Vec<String>,
+    pub snapshots: u32,
+    pub last_snapshot: i64,
+    pub files: u64,
+    pub stored_mb: u64,
+    /// The last pass saw mass modification consistent with encryption;
+    /// older snapshots are being retained.
+    pub suspect: bool,
+}
+
+/// Execution-prevention policy pushed from the server to sensors.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Policy {
+    /// SHA-256 of binaries that must not run.
+    #[serde(default)]
+    pub block_hashes: Vec<String>,
+    /// Path prefixes binaries must not run from (for example `/dev/shm/`).
+    #[serde(default)]
+    pub block_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +111,7 @@ pub struct EventBatch {
 
 /// A response action queued by the console (or by policy) for a sensor.
 /// Kinds: `kill_process`, `quarantine_file`, `isolate_host`, `unisolate_host`,
-/// `collect_triage`.
+/// `collect_triage`, `rollback_files`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
     pub id: String,
@@ -93,6 +125,8 @@ pub struct BatchResponse {
     pub actions: Vec<Action>,
     /// `detect` or `protect`.
     pub mode: String,
+    #[serde(default)]
+    pub policy: Policy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

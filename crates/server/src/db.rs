@@ -64,6 +64,16 @@ CREATE TABLE IF NOT EXISTS api_keys (
   role TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, role TEXT NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS endpoint_vulns (
+  endpoint_id TEXT NOT NULL, vuln_id TEXT NOT NULL, package TEXT NOT NULL, installed TEXT NOT NULL,
+  fixed TEXT, severity TEXT NOT NULL, summary TEXT, published TEXT,
+  PRIMARY KEY (endpoint_id, vuln_id, package)
+);
+UPDATE api_keys SET role = 'analyst' WHERE role = 'operator';
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, actor TEXT NOT NULL,
   action TEXT NOT NULL, detail TEXT

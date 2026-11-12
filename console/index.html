@@ -50,6 +50,7 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padd
   <h2><span class="brand">POSTERN <span>CYBER</span></span></h2>
   <p class="mute">Paste the admin token (written to <span class="mono">admin.token</span> in the server's data directory) or an API key.</p>
   <div class="row"><input id="tok" type="password" placeholder="pca_…" style="flex:1"><button class="b pri" id="tokgo">Sign in</button></div>
+  <div class="row" id="ssorow" hidden><a class="b pri" href="/auth/oidc/login" style="text-decoration:none;flex:1;text-align:center">Sign in with single sign-on</a></div>
   <div id="loginerr" class="err"></div>
 </div>
 <div id="app" hidden>
@@ -57,6 +58,7 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padd
   <div class="brand">POSTERN <span>CYBER</span></div>
   <nav id="nav"></nav>
   <span style="flex:1"></span>
+  <span class="mute" id="whoami"></span>
   <button class="b" id="logout">Sign out</button>
 </header>
 <main id="view"></main>
@@ -70,15 +72,16 @@ const $ = id => document.getElementById(id);
 const view = $("view");
 let token = sessionStorage.getItem("postern_token") || "";
 let timer = null;
+let me = {name: "", role: "viewer"};
 
 async function api(path, body) {
   const r = await fetch("/api/v1" + path, {
     method: body === undefined ? "GET" : "POST",
-    headers: {"Authorization": "Bearer " + token, ...(body === undefined ? {} : {"Content-Type": "application/json"})},
+    headers: {"X-Postern-CSRF": "1", ...(token ? {"Authorization": "Bearer " + token} : {}), ...(body === undefined ? {} : {"Content-Type": "application/json"})},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({error: r.statusText}));
-  if (r.status === 401) { signOut(); throw new Error("session expired"); }
+  if (r.status === 401 && path !== "/me") { signOut(false); throw new Error("session expired"); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
@@ -89,7 +92,7 @@ const sev = s => `<span class="sev ${esc(s)}">${esc(s)}</span>`;
 const tags = a => (a || []).map(t => `<span class="tag">${esc(t)}</span>`).join("");
 const subject = f => f ? (f["process.cmdline"] || f["file.path"] || (f["net.remote_ip"] ? `${f["net.remote_ip"]}:${f["net.remote_port"]}` : "") ||
   (f["auth.user"] ? `${f["auth.user"]} ${f["auth.result"] || ""} ${f["auth.source_ip"] || ""}` : "") || (f["net.local_port"] ? `port ${f["net.local_port"]}` : "") ||
-  (f["posture.check"] ? `${f["posture.check"]}: ${f["posture.status"]}` : JSON.stringify(f))) : "";
+  (f["posture.check"] ? `${f["posture.check"]}: ${f["posture.status"]}` : "") || (f["ransomware.signal"] ? `${f["ransomware.signal"]} (${f["ransomware.changed"] ?? ""} changed)` : JSON.stringify(f))) : "";
 const table = (heads, rows, empty) => rows.length
   ? `<div class="wrap"><table><thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`
   : `<p class="mute">${esc(empty)}</p>`;
@@ -133,14 +136,18 @@ const tabs = {
 
   Endpoints: async () => {
     const rows = await api("/endpoints");
-    view.innerHTML = `<h2>Endpoints</h2>` + table(["Host","OS","Sensor","Last seen","CPU","Memory","Mode","Response","Open incidents",""], rows.map(e => {
+    view.innerHTML = `<h2>Endpoints</h2>` + table(["Host","OS","Sensor","Last seen","CPU","Memory","Mode","Capabilities","Kernel","Vault","Open incidents",""], rows.map(e => {
       const hb = e.heartbeat || {}, online = Date.now() - e.last_seen < 90000, ext = e.os === "external";
       return `<tr><td><span class="dot ${e.isolated ? "iso" : online ? "on" : ""}"></span><a href="#" data-ep="${esc(e.id)}">${esc(e.hostname)}</a>${e.isolated ? ' <span class="sev critical">isolated</span>' : ""}</td>
         <td>${esc(e.os)} ${esc(e.arch)}</td><td>${esc(e.version)}</td><td>${ago(e.last_seen)}</td>
         <td>${ext ? "" : (hb.cpu_pct ?? 0).toFixed(0) + "%"}</td><td>${ext ? "" : `${hb.mem_used_mb ?? 0} / ${hb.mem_total_mb ?? 0} MB`}</td>
         <td>${ext ? "" : `<select data-mode="${esc(e.id)}"><option ${e.mode === "detect" ? "selected" : ""}>detect</option><option ${e.mode === "protect" ? "selected" : ""}>protect</option></select>`}</td>
-        <td>${tags(hb.response_caps)}${ext || (hb.response_caps || []).length ? "" : '<span class="mute">observe only</span>'}</td><td>${e.open_incidents}</td>
+        <td>${tags(hb.response_caps)}${ext || (hb.response_caps || []).length ? "" : '<span class="mute">observe only</span>'}</td>
+        <td>${ext ? "" : `<span class="tag">proc: ${esc(hb.process_source || "poll")}</span><span class="tag">exec: ${esc(hb.exec_guard || "off")}</span>`}</td>
+        <td>${hb.vault ? `${hb.vault.suspect ? '<span class="sev critical">suspect</span> ' : ""}${hb.vault.snapshots} snap · ${hb.vault.files} files<br><span class="mute">${ago(hb.vault.last_snapshot)}</span>` : '<span class="mute">off</span>'}</td>
+        <td>${e.open_incidents}</td>
         <td>${ext ? "" : `<button class="b" data-act="collect_triage" data-id="${esc(e.id)}">Triage snapshot</button>
+          ${hb.vault ? `<button class="b danger" data-act="rollback_files" data-id="${esc(e.id)}">Roll back files</button>${hb.vault.suspect ? `<button class="b" data-act="vault_accept" data-id="${esc(e.id)}">Accept changes</button>` : ""}` : ""}
           <button class="b danger" data-act="${e.isolated ? "unisolate_host" : "isolate_host"}" data-id="${esc(e.id)}">${e.isolated ? "Lift isolation" : "Isolate"}</button>`}</td></tr>`;
     }), "No endpoints enrolled yet. Install a sensor with the enrollment token from Settings.") + `<div id="epd"></div>`;
     view.querySelectorAll("[data-mode]").forEach(s => s.onchange = async () => {
@@ -149,6 +156,8 @@ const tabs = {
     });
     view.querySelectorAll("[data-act]").forEach(b => b.onclick = () => {
       if (b.dataset.act === "isolate_host" && !confirm("Isolate this host from the network? Only the management server stays reachable.")) return;
+      if (b.dataset.act === "rollback_files" && !confirm("Restore every protected file on this host to the last good snapshot? Files created since then are moved aside, not deleted.")) return;
+      if (b.dataset.act === "vault_accept" && !confirm("Treat the current state of the protected directories as legitimate? The next snapshot will store it.")) return;
       busy(b, async () => { await api(`/endpoints/${b.dataset.id}/actions`, {kind: b.dataset.act}); show("Response"); });
     });
     view.querySelectorAll("[data-ep]").forEach(a => a.onclick = async ev => {
@@ -168,7 +177,7 @@ const tabs = {
     const q = sessionStorage.getItem("hunt_q") || "", kind = sessionStorage.getItem("hunt_k") || "", mins = sessionStorage.getItem("hunt_m") || "60";
     view.innerHTML = `<h2>Hunt — raw telemetry</h2><div class="row">
       <input id="hq" type="text" placeholder="text in command line, path, address, user…" value="${esc(q)}" style="flex:1">
-      <select id="hk">${["","process_start","file_change","net_conn","listen_port","auth","posture","external"].map(k => `<option value="${k}" ${k === kind ? "selected" : ""}>${k || "any kind"}</option>`).join("")}</select>
+      <select id="hk">${["","process_start","file_change","net_conn","listen_port","auth","posture","exec_blocked","ransomware_canary","ransomware_suspected","external"].map(k => `<option value="${k}" ${k === kind ? "selected" : ""}>${k || "any kind"}</option>`).join("")}</select>
       <select id="hm">${[["60","last hour"],["1440","last 24h"],["10080","last 7d"],["43200","last 30d"]].map(([v, l]) => `<option value="${v}" ${v === mins ? "selected" : ""}>${l}</option>`).join("")}</select>
       <button class="b pri" id="hgo">Search</button></div><div id="hres"></div>`;
     const run = async () => {
@@ -224,6 +233,26 @@ const tabs = {
     $("iadd").onclick = e => busy(e.target, async () => { await api("/iocs", {kind: $("ik").value, value: $("iv").value, note: $("in").value}); show("Detections"); });
   },
 
+  Exposure: async () => {
+    const ep = sessionStorage.getItem("vuln_ep") || "";
+    const d = await api("/vulns" + (ep ? "?endpoint=" + encodeURIComponent(ep) : ""));
+    const sevClass = s => ({critical: "critical", high: "high", medium: "medium", low: "low"}[s] || "info");
+    view.innerHTML = `<div class="row"><h2 style="margin:0">Exposure — known vulnerabilities in installed packages</h2><span style="flex:1"></span>
+      <span class="mute">matched ${d.last_run ? ago(d.last_run) : "never"}</span>${me.role === "admin" ? '<button class="b" id="vref">Download feed and re-match</button>' : ""}</div>
+      <p class="mute">Installed packages are matched on this server against the public OSV database for the host's distribution (Ubuntu and Debian today). No inventory leaves the server.</p>` +
+      table(["Host","OS","Critical","High","Medium","Other","Fix available","Total"], d.summary.map(h =>
+        `<tr class="click" data-vep="${esc(h.endpoint_id)}"><td>${esc(h.hostname)}${h.endpoint_id === ep ? ' <span class="tag">filtered</span>' : ""}</td><td>${esc(h.os || "")}</td>
+         <td style="color:var(--crit)">${h.critical || 0}</td><td style="color:var(--high)">${h.high || 0}</td><td>${h.medium || 0}</td><td>${h.other || 0}</td><td>${h.fixable || 0}</td><td><b>${h.total || 0}</b></td></tr>`), "No endpoints.") +
+      `<h3>Findings${ep ? ' <a href="#" id="vall">show all hosts</a>' : ""} <span class="mute">(top 500 by severity)</span></h3>` +
+      table(["CVE","Severity","Host","Package","Installed","Fixed in","Published","Summary"], d.findings.map(v =>
+        `<tr><td class="mono" style="white-space:nowrap">${esc(v.vuln_id)}</td><td><span class="sev ${sevClass(v.severity)}">${esc(v.severity)}</span></td><td>${esc(v.hostname)}</td><td class="mono">${esc(v.package)}</td>
+         <td class="mono">${esc(v.installed)}</td><td class="mono">${v.fixed ? esc(v.fixed) : '<span class="mute">no fix yet</span>'}</td><td>${esc(v.published)}</td><td>${esc(v.summary)}</td></tr>`),
+        "No findings. Matching runs when a sensor reports its package inventory (at start and every 6 hours).");
+    view.querySelectorAll("[data-vep]").forEach(tr => tr.onclick = () => { sessionStorage.setItem("vuln_ep", tr.dataset.vep); show("Exposure"); });
+    if ($("vall")) $("vall").onclick = e => { e.preventDefault(); sessionStorage.removeItem("vuln_ep"); show("Exposure"); };
+    if ($("vref")) $("vref").onclick = e => busy(e.target, async () => { const r = await api("/vulns/refresh", {}); alert(JSON.stringify(r.feeds)); show("Exposure"); });
+  },
+
   Response: async () => {
     const [acts, audit] = await Promise.all([api("/actions"), api("/audit")]);
     view.innerHTML = `<h2>Response actions</h2>` + table(["Requested","Host","Action","Parameters","Status","By","Result"], acts.map(a =>
@@ -237,8 +266,11 @@ const tabs = {
 
   Settings: async () => {
     const s = await api("/settings");
-    const origin = location.origin;
-    view.innerHTML = `<h2>Settings <span class="tag">v${esc(s.version)}</span></h2><div class="two">
+    const origin = location.origin, adm = s.is_admin;
+    const roleSel = (id, v) => `<select id="${id}">${["viewer","analyst","admin"].map(r => `<option ${r === v ? "selected" : ""}>${r}</option>`).join("")}</select>`;
+    const rm = (s.sso && s.sso.role_map) || {emails: {}, groups: {}, domains: {}, default: ""};
+    const mapText = o => Object.entries(o || {}).map(([k, v]) => `${k} = ${v}`).join("\n");
+    view.innerHTML = `<h2>Settings <span class="tag">v${esc(s.version)}</span></h2>${adm ? "" : '<p class="mute">You are signed in without the admin role; settings are read-only and secrets are hidden.</p>'}<div class="two">
       <div class="card"><h3 style="margin-top:0">AI analyst (Anthropic API)</h3>
         <p>Status: ${s.ai.configured ? `<span class="sev low">configured</span> key from ${esc(s.ai.key_source)}` : '<span class="sev high">no API key</span>'}</p>
         <div class="row"><input id="ak" type="password" placeholder="sk-ant-… (leave empty to keep)" style="flex:1"></div>
@@ -247,17 +279,46 @@ const tabs = {
         <div class="row"><label><input id="af" type="checkbox" ${s.ai.fallbacks ? "checked" : ""}> Re-run on Anthropic's recommended fallback model if a request is declined</label></div>
         <div class="row"><button class="b pri" id="asave">Save</button><button class="b" id="atest">Test connection</button><span id="ares" class="mute"></span></div>
         <p class="mute">Claude Mythos 5.2 (<span class="mono">claude-mythos-5-2</span>) is available to verified organizations only. Any other Claude model id works here too. The key is stored in the server database; prefer the <span class="mono">ANTHROPIC_API_KEY</span> environment variable on shared hosts.</p></div>
-      <div class="card"><h3 style="margin-top:0">Enroll a sensor</h3><p class="mute">Run on the endpoint (as root for full visibility):</p>
+
+      <div class="card"><h3 style="margin-top:0">Execution prevention (hosts in protect mode)</h3>
+        <p class="mute">Linux sensors started as root with <span class="mono">--response prevent</span> deny a program before it runs when it matches this policy.</p>
+        <div class="row"><label><input id="ph" type="checkbox" ${s.prevention.block_ioc_hashes ? "checked" : ""}> Block every SHA-256 on the indicator list</label></div>
+        <label>Block execution from these path prefixes (one per line)</label>
+        <textarea id="pp" placeholder="/dev/shm/&#10;/var/tmp/">${esc((s.prevention.block_paths || []).join("\n"))}</textarea>
+        <div class="row" style="margin-top:8px"><button class="b pri" id="psave">Save policy</button></div>
+        <p class="mute">Blocking <span class="mono">/tmp/</span> breaks installers and build tools that run from it; test on one host first.</p></div>
+
+      <div class="card"><h3 style="margin-top:0">Single sign-on (OpenID Connect)</h3>
+        <p>Status: ${s.sso.enabled ? '<span class="sev low">enabled</span>' : '<span class="sev info">not configured</span>'}</p>
+        ${adm ? `<div class="row"><label>Issuer URL <input id="si" type="text" value="${esc(s.sso.issuer)}" placeholder="https://accounts.google.com"></label></div>
+        <div class="row"><label>Client ID <input id="sc" type="text" value="${esc(s.sso.client_id)}"></label>
+          <label>Client secret <input id="ss" type="password" placeholder="${s.sso.secret_set ? "(set — leave empty to keep)" : ""}"></label></div>
+        <div class="row"><label>Console URL <input id="sb" type="text" value="${esc(s.sso.base_url || origin)}"></label></div>
+        <p class="mute">Register <span class="mono">${esc((s.sso.base_url || origin) + "/auth/oidc/callback")}</span> as the redirect URI at the provider.</p>
+        <label>Role by email (<span class="mono">address = role</span>)</label><textarea id="me1" style="min-height:54px">${esc(mapText(rm.emails))}</textarea>
+        <label>Role by group claim</label><textarea id="mg" style="min-height:54px">${esc(mapText(rm.groups))}</textarea>
+        <label>Role by email domain</label><textarea id="md" style="min-height:54px">${esc(mapText(rm.domains))}</textarea>
+        <div class="row" style="margin-top:8px"><label>Everyone else ${`<select id="mdef">${["","viewer","analyst","admin"].map(r => `<option value="${r}" ${r === (rm.default || "") ? "selected" : ""}>${r || "refuse sign-in"}</option>`).join("")}</select>`}</label>
+          <button class="b pri" id="ssave">Save SSO</button></div>` : ""}
+        <p class="mute">Roles: <b>viewer</b> reads; <b>analyst</b> also triages, responds and edits detections; <b>admin</b> also changes settings, keys and protection mode.</p></div>
+
+      <div class="card"><h3 style="margin-top:0">Enroll a sensor</h3>${adm ? `<p class="mute">Run on the endpoint (root or Administrator for full visibility):</p>
         <pre>postern-sensor --server ${esc(origin)} \\\n  --enroll-token ${esc(s.enroll_token)}</pre>
-        <p class="mute">Add <span class="mono">--response kill,quarantine,isolate</span> to allow response actions on that host. Without it the sensor only observes.</p>
-        <h3>API keys</h3>${table(["Name","Role","Created"], s.api_keys.map(k => `<tr><td>${esc(k.name)}</td><td>${esc(k.role)}</td><td>${when(k.created_at)}</td></tr>`), "")}
-        <div class="row" style="margin-top:8px"><input id="kn" type="text" placeholder="integration name"><button class="b" id="kadd">Create key</button></div><div id="kout"></div></div></div>`;
+        <p class="mute">Add <span class="mono">--response kill,quarantine,isolate,prevent,rollback</span> to allow those actions on that host and <span class="mono">--protect /srv/data</span> to keep rollback copies of a directory. Without <span class="mono">--response</span> the sensor only observes.</p>
+        <h3>API keys</h3>${table(["Name","Role","Created",""], s.api_keys.map(k => `<tr><td>${esc(k.name)}</td><td>${esc(k.role)}</td><td>${when(k.created_at)}</td><td><button class="b danger" data-kdel="${k.id}">Revoke</button></td></tr>`), "")}
+        <div class="row" style="margin-top:8px"><input id="kn" type="text" placeholder="integration name">${roleSel("kr", "analyst")}<button class="b" id="kadd">Create key</button></div><div id="kout"></div>` : '<p class="mute">Ask an administrator for the enrollment token.</p>'}</div></div>`;
+    const parseMap = id => Object.fromEntries($(id).value.split("\n").map(l => l.split("=").map(x => x.trim())).filter(p => p.length === 2 && p[0] && p[1]));
     $("asave").onclick = e => busy(e.target, async () => { const b = {model: $("am").value, effort: $("ae").value, fallbacks: $("af").checked};
       if ($("ak").value) b.api_key = $("ak").value; await api("/settings/ai", b); show("Settings"); });
     $("atest").onclick = e => busy(e.target, async () => { $("ares").textContent = "";
       try { const r = await api("/settings/ai/test", {}); $("ares").textContent = `OK — served by ${r.served_by}`; } catch (x) { $("ares").textContent = x.message; } });
-    $("kadd").onclick = e => busy(e.target, async () => { const r = await api("/keys", {name: $("kn").value || "integration"});
-      $("kout").innerHTML = `<p>Copy this key now; it is not shown again:</p><pre>${esc(r.key)}</pre>`; });
+    $("psave").onclick = e => busy(e.target, async () => { await api("/settings/prevention", {block_ioc_hashes: $("ph").checked, block_paths: $("pp").value.split("\n").map(x => x.trim()).filter(Boolean)}); show("Settings"); });
+    if ($("ssave")) $("ssave").onclick = e => busy(e.target, async () => { const b = {issuer: $("si").value, client_id: $("sc").value, base_url: $("sb").value,
+      role_map: {emails: parseMap("me1"), groups: parseMap("mg"), domains: parseMap("md"), default: $("mdef").value}};
+      if ($("ss").value) b.client_secret = $("ss").value; await api("/settings/sso", b); show("Settings"); });
+    if ($("kadd")) $("kadd").onclick = e => busy(e.target, async () => { const r = await api("/keys", {name: $("kn").value || "integration", role: $("kr").value});
+      $("kout").innerHTML = `<p>Copy this ${esc(r.role)} key now; it is not shown again:</p><pre>${esc(r.key)}</pre>`; });
+    view.querySelectorAll("[data-kdel]").forEach(b => b.onclick = () => { if (confirm("Revoke this key?")) busy(b, async () => { await api(`/keys/${b.dataset.kdel}/delete`, {}); show("Settings"); }); });
   },
 };
 
@@ -302,11 +363,17 @@ async function show(name) {
   try { await tabs[name](); } catch (e) { view.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   if (["Overview", "Incidents", "Response"].includes(name)) timer = setInterval(() => tabs[name]().catch(() => {}), 15000);
 }
-function signOut() { sessionStorage.removeItem("postern_token"); token = ""; clearInterval(timer); $("app").hidden = true; $("login").hidden = false; }
+function signOut(remote) {
+  if (remote !== false) fetch("/auth/logout", {method: "POST"}).catch(() => {});
+  sessionStorage.removeItem("postern_token"); token = ""; clearInterval(timer); $("app").hidden = true; $("login").hidden = false;
+  fetch("/auth/config").then(r => r.json()).then(c => { $("ssorow").hidden = !c.sso; }).catch(() => {});
+}
 async function start() {
-  if (!token) return signOut();
-  try { await api("/overview"); } catch (e) { $("loginerr").textContent = "That token was not accepted."; return signOut(); }
+  const err = new URLSearchParams(location.search).get("login_error");
+  if (err) { $("loginerr").textContent = "Sign-in failed: " + err; history.replaceState(null, "", "/"); }
+  try { me = await api("/me"); } catch (e) { if (token) $("loginerr").textContent = "That token was not accepted."; return signOut(false); }
   $("login").hidden = true; $("app").hidden = false;
+  $("whoami").textContent = `${me.name} · ${me.role}`;
   $("nav").innerHTML = Object.keys(tabs).map(t => `<button>${esc(t)}</button>`).join("");
   document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.textContent));
   const saved = sessionStorage.getItem("tab");
@@ -314,7 +381,7 @@ async function start() {
 }
 $("tokgo").onclick = () => { token = $("tok").value.trim(); sessionStorage.setItem("postern_token", token); $("loginerr").textContent = ""; start(); };
 $("tok").onkeydown = e => e.key === "Enter" && $("tokgo").click();
-$("logout").onclick = signOut;
+$("logout").onclick = () => signOut();
 start();
 </script>
 </body>
