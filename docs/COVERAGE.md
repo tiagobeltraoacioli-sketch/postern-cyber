@@ -13,7 +13,7 @@ Postern Cyber 0.2 stands on each. "Partial" and "No" rows are the roadmap.
 | Network telemetry | Partial | New TCP connections and listeners every 10 s; no DNS, no UDP flows |
 | File integrity monitoring | Yes | Critical system paths plus `--watch`; polled every 30 s |
 | Authentication telemetry | Partial | SSH and sudo (Linux), logon events 4624/4625 (Windows, unverified) |
-| Behavioral detections, ATT&CK mapped | Yes | 47 built-in rules (Linux, macOS, Windows); custom YAML rules |
+| Behavioral detections, ATT&CK mapped | Yes | 48 built-in rules (Linux, macOS, Windows); custom YAML rules |
 | Pre-execution blocking | Yes (Linux) | fanotify permission events: a binary on the hash block list, or under a blocked path prefix, is denied before it runs. Needs root and `--response prevent`. Scripts run through an interpreter (`bash x.sh`) are not covered; Windows and macOS need a kernel driver / system extension |
 | Machine-learning static analysis | No | Blocking is by hash and path policy |
 | Indicator matching (hash, IP) | Yes | No bundled threat-intel feed; bring your own |
@@ -57,8 +57,10 @@ Postern Cyber 0.2 stands on each. "Partial" and "No" rows are the roadmap.
     byte for byte and moved the ransom note aside.
 - Windows `.exe` under Wine: enrollment, heartbeat, posture, vault,
   mass-encryption alert and rollback.
-- Vulnerability matching against the live Ubuntu 24.04 OSV feed on a real
-  host (see docs/DEPLOY.md for the numbers of the reference deployment).
+- Vulnerability matching against the live Ubuntu OSV feed: an inventory of
+  Ubuntu 24.04 release-day versions of openssl, openssh, sudo and curl was
+  flagged with the right fixed versions (including CVE-2024-6387 and
+  CVE-2025-32463), and a package already at its fixed version was not.
 
 ## Not yet verified
 

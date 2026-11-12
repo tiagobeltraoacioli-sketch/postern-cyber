@@ -3,7 +3,11 @@
 //!
 //! The whole database for a distribution is downloaded and matched locally,
 //! so no inventory leaves the server. Feeds:
-//! https://osv-vulnerabilities.storage.googleapis.com/<ecosystem>/all.zip
+//! https://osv-vulnerabilities.storage.googleapis.com/<Distribution>/all.zip
+//!
+//! The per-release archives (`Ubuntu:24.04:LTS/all.zip`) stopped updating in
+//! October 2024; only the per-distribution archive is current, so that is
+//! the one downloaded, and records are filtered by release while scanning.
 
 use crate::{db, AppState};
 use rusqlite::params;
@@ -163,8 +167,19 @@ fn scan_feed(zip_path: &Path, eco: &str, installed: &HashMap<String, Vec<Install
             let Some(hosts) = installed.get(pkg) else { continue };
             for h in hosts {
                 let Some(fixed) = affected(entry, &h.version) else { continue };
+                // The distribution's own priority: a top-level severity entry
+                // typed with the distribution name in current records, an
+                // ecosystem_specific field in older ones.
                 let spec = &entry["ecosystem_specific"];
-                let severity = spec["ubuntu_priority"].as_str().or(spec["urgency"].as_str()).unwrap_or("unknown");
+                let severity = rec["severity"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|s| s["type"].as_str() == Some(distribution(eco)))
+                    .and_then(|s| s["score"].as_str())
+                    .or(spec["ubuntu_priority"].as_str())
+                    .or(spec["urgency"].as_str())
+                    .unwrap_or("unknown");
                 let id = rec["id"].as_str().unwrap_or(&name);
                 out.push(Finding {
                     endpoint_id: h.endpoint_id.clone(),
@@ -182,8 +197,13 @@ fn scan_feed(zip_path: &Path, eco: &str, installed: &HashMap<String, Vec<Install
     Ok((out, records))
 }
 
+/// "Ubuntu:24.04:LTS" -> "Ubuntu": the archive that holds every release.
+fn distribution(eco: &str) -> &str {
+    eco.split(':').next().unwrap_or(eco)
+}
+
 async fn download(state: &AppState, eco: &str, dest: &Path) -> anyhow::Result<()> {
-    let url = format!("{FEED_BASE}/{eco}/all.zip");
+    let url = format!("{FEED_BASE}/{}/all.zip", distribution(eco));
     let mut resp = state.http.get(&url).send().await?.error_for_status()?;
     let tmp = dest.with_extension("part");
     {
@@ -198,7 +218,7 @@ async fn download(state: &AppState, eco: &str, dest: &Path) -> anyhow::Result<()
 }
 
 fn feed_path(dir: &Path, eco: &str) -> PathBuf {
-    let safe: String = eco.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' { c } else { '_' }).collect();
+    let safe: String = distribution(eco).chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     dir.join(format!("{safe}.zip"))
 }
 
@@ -234,6 +254,7 @@ pub async fn refresh(state: &Arc<AppState>, force_download: bool) -> anyhow::Res
     let dir = state.data_dir.join("feeds");
     std::fs::create_dir_all(&dir)?;
     let mut report = Vec::new();
+    let mut downloaded: Vec<PathBuf> = Vec::new();
     for (eco, installed) in by_eco {
         let path = feed_path(&dir, &eco);
         let age = std::fs::metadata(&path)
@@ -241,7 +262,10 @@ pub async fn refresh(state: &Arc<AppState>, force_download: bool) -> anyhow::Res
             .ok()
             .and_then(|t| t.elapsed().ok())
             .map(|d| d.as_millis() as i64);
-        if force_download || age.is_none_or(|a| a > FEED_MAX_AGE_MS) {
+        // Two releases of one distribution share an archive; fetch it once.
+        let fetched_now = downloaded.contains(&path);
+        if !fetched_now && (force_download || age.is_none_or(|a| a > FEED_MAX_AGE_MS)) {
+            downloaded.push(path.clone());
             if let Err(e) = download(state, &eco, &path).await {
                 if !path.exists() {
                     report.push(json!({"ecosystem": eco, "error": format!("feed download failed: {e}")}));

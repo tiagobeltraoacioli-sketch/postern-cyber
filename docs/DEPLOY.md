@@ -92,6 +92,13 @@ redirect URI `https://<console>/auth/oidc/callback`, then fill Issuer, Client
 ID, Client secret and the role mapping under Settings. Keep at least one
 admin API key as a break-glass credential.
 
+## Vulnerability feeds
+
+The server downloads one archive per distribution in use into
+`<data-dir>/feeds/` once a day (Ubuntu: about 815 MB, Debian: about 80 MB)
+and scans it in roughly a minute and a half. It needs outbound HTTPS to
+`osv-vulnerabilities.storage.googleapis.com`; nothing is uploaded.
+
 ## Website
 
 `site/index.html` is a static file (`scripts/build-site.sh` regenerates it

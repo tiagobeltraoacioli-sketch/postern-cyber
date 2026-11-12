@@ -316,13 +316,13 @@
 
 - id: PC-C2-003
   title: New listening port opened by a shell or network tool
-  description: A listener was opened by an interpreter or a raw network utility.
+  description: A listener was opened by a shell or a raw network utility. Script interpreters are left out on purpose - Python, Ruby and PHP servers are ordinary.
   severity: high
   mitre: [T1571, T1059]
   kind: listen_port
   match:
     all:
-      - { field: process.name, op: regex, value: '(?i)^(nc|ncat|netcat|socat|bash|sh|dash|python[0-9.]*|perl|ruby|php)$' }
+      - { field: process.name, op: regex, value: '(?i)^(nc|ncat|netcat|nc\.traditional|socat|bash|sh|dash|zsh|ksh)$' }
     none:
       - { field: net.baseline, op: eq, value: 'true' }
 

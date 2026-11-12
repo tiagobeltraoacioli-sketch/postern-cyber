@@ -13,7 +13,7 @@ before relying on it: it lists what works today and what does not.
 |---|---|---|
 | `postern-sensor` | `crates/sensor` | Linux/macOS/Windows agent: kernel-pushed process events and pre-execution blocking (Linux), network, file-integrity, authentication, posture and inventory telemetry, ransomware vault and rollback; executes response actions it was granted |
 | `postern-server` | `crates/server` | Ingestion, detection engine, incident correlation, response queue, CVE matching, AI analyst, SSO and roles, REST API, embedded console |
-| Detections | `rules/builtin.yml` | 47 behavioral rules (Linux, macOS, Windows) mapped to MITRE ATT&CK |
+| Detections | `rules/builtin.yml` | 48 behavioral rules (Linux, macOS, Windows) mapped to MITRE ATT&CK |
 | Console | `console/index.html` | Operator UI, embedded in the server binary |
 | Website | `site/` | posterncyber.com landing page |
 
